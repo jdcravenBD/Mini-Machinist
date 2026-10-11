@@ -5,3 +5,6 @@
 # Local tooling
 .claude/
 CLAUDE.md
+
+# Local scratch scripts
+tests/_*

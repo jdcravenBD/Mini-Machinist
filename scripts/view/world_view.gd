@@ -12,10 +12,9 @@ const BORDER := Color(1, 1, 1, 0.18)
 const OUTLINE := Color(0, 0, 0, 0.35)
 const BELT := Color(0.15, 0.15, 0.16)
 const BELT_MARK := Color(0.80, 0.68, 0.30)
-const ITEM_COLORS := {
-	&"iron_ore": Color(0.66, 0.38, 0.26),
-	&"rock": Color(0.52, 0.52, 0.50),
-}
+const ITEM_OUTLINE := Color(0, 0, 0, 0.45)
+## Drawn outlines stick out a little past the collision circle so piles look packed.
+const ITEM_DRAW_SCALE := 1.1
 
 var machine: Machine
 var sim: Simulation
@@ -24,6 +23,8 @@ var ghost_type: StringName = &""
 var ghost_cell := Vector2i.ZERO
 var ghost_flipped := false
 var ghost_valid := true
+## [kind, shape] -> drawing polygons ("body", "fleck", "outline") sized for that kind.
+var _item_polys := {}
 
 
 func _process(_delta: float) -> void:
@@ -43,10 +44,37 @@ func _draw() -> void:
 
 	if sim:
 		for it in sim.items:
-			draw_circle(Vector2(it.x, it.y), it.radius, ITEM_COLORS.get(it.kind, Color.MAGENTA), true, -1.0, true)
+			_draw_item(it)
+		draw_set_transform_matrix(Transform2D.IDENTITY)
 	elif ghost_type != &"":
 		var tint := Color(1, 1, 1, 0.55) if ghost_valid else Color(1, 0.35, 0.35, 0.55)
 		_draw_part(ghost_type, ghost_cell, ghost_flipped, tint)
+
+
+## A lumpy chunk with a lighter fleck, so you can see it tumble and spin.
+func _draw_item(it: Item) -> void:
+	var key := [it.kind, it.shape]
+	if not _item_polys.has(key):
+		_item_polys[key] = _build_item_polys(it.kind, it.shape)
+	var polys: Dictionary = _item_polys[key]
+	var def: Dictionary = ItemDefs.DEFS[it.kind]
+	draw_set_transform(Vector2(it.x, it.y), it.angle)
+	draw_colored_polygon(polys["body"], def["color"])
+	draw_colored_polygon(polys["fleck"], def["fleck"])
+	draw_polyline(polys["outline"], ITEM_OUTLINE, 1.0, true)
+
+
+func _build_item_polys(kind: StringName, shape: int) -> Dictionary:
+	var r := ItemDefs.radius_of(kind) * ITEM_DRAW_SCALE
+	var mults: Array = ItemDefs.SHAPES[shape]
+	var body := PackedVector2Array()
+	for i in mults.size():
+		body.append(Vector2.from_angle(TAU * i / mults.size()) * r * mults[i])
+	var outline := body.duplicate()
+	outline.append(body[0])
+	# Fleck: a small facet between the first two corners, pulled toward the center.
+	var fleck := PackedVector2Array([body[0] * 0.75, body[1] * 0.75, (body[0] + body[1]) * 0.2])
+	return {"body": body, "fleck": fleck, "outline": outline}
 
 
 func _draw_grid(size: Vector2) -> void:

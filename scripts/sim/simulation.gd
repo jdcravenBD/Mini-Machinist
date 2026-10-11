@@ -21,6 +21,10 @@ const MAX_SPEED := 400.0
 const MAX_STEP := 3.5
 ## Fraction of sliding between two touching items removed per substep.
 const ITEM_FRICTION := 0.1
+## How quickly a touching surface brings an item's spin to rolling speed (per substep),
+## and how much spin an item keeps per substep in the air.
+const SPIN_GRIP := 0.3
+const SPIN_KEEP := 0.995
 const MAX_ITEMS := 600
 ## Largest item radius; static segments are registered with this much margin.
 const MAX_RADIUS := 6.0
@@ -185,11 +189,10 @@ func _run_spawners() -> void:
 			continue
 		# Every third bit is rock (the impurity). The small sideways offset follows a fixed
 		# pattern so piles look natural while staying repeatable.
-		var is_rock := sp.count % 3 == 2
-		var radius := 6.0 if is_rock else 5.0
+		var kind := &"rock" if sp.count % 3 == 2 else &"iron_ore"
 		var jitter := float((sp.count * 7) % 5 - 2)
-		var kind := &"rock" if is_rock else &"iron_ore"
-		items.append(Item.new(kind, radius, sp.x + jitter, sp.y + radius))
+		var shape := sp.count % ItemDefs.SHAPES.size()
+		items.append(Item.new(kind, sp.x + jitter, sp.y + ItemDefs.radius_of(kind), shape))
 		sp.count += 1
 
 
@@ -210,6 +213,11 @@ func _predict() -> void:
 			continue
 		it.step_x = it.x
 		it.step_y = it.y
+		it.push_right = 0.0
+		it.push_left = 0.0
+		it.push_down = 0.0
+		it.push_up = 0.0
+		it.spin *= SPIN_KEEP
 		it.vy += GRAVITY * H
 		var speed_sq := it.vx * it.vx + it.vy * it.vy
 		if speed_sq > MAX_SPEED * MAX_SPEED:
@@ -227,6 +235,7 @@ func _update_velocities() -> void:
 			continue
 		it.vx = (it.x - it.step_x) / H
 		it.vy = (it.y - it.step_y) / H
+		it.angle = fposmod(it.angle + it.spin * H, TAU)
 
 
 func _limit_moves() -> void:
@@ -268,16 +277,31 @@ func _resolve_segment(it: Item, s: Segment) -> void:
 	var pen := it.radius - dist
 	it.x += nx * pen
 	it.y += ny * pen
+	_add_push(it, nx * pen, ny * pen)
 	if s.surface_speed != 0.0:
-		it.belt_tick = tick
+		it.carried_tick = tick
 
 	# Friction pulls the item's sliding toward the surface's own movement (none unless a belt).
 	var tnx := -ny
 	var tny := nx
 	var surface_step := s.surface_speed * H
 	var slide := (it.x - it.step_x - s.tx * surface_step) * tnx + (it.y - it.step_y - s.ty * surface_step) * tny
-	it.x -= tnx * slide * s.friction
-	it.y -= tny * slide * s.friction
+	var drag := -slide * s.friction
+	if s.surface_speed != 0.0:
+		# A belt can't shove an item into whatever is holding it back (a wall, the item ahead
+		# in a queue); it slips under it instead. Otherwise a long queue gets squashed.
+		var dir_x := tnx * signf(drag)
+		var dir_y := tny * signf(drag)
+		var held := (it.push_left if dir_x > 0.0 else it.push_right) * absf(dir_x)
+		held += (it.push_up if dir_y > 0.0 else it.push_down) * absf(dir_y)
+		drag = signf(drag) * maxf(0.0, absf(drag) - held)
+	it.x += tnx * drag
+	it.y += tny * drag
+
+	# Spin toward rolling along the surface. An item held still on a running belt spins
+	# in place, which shows the belt is still working on it.
+	var rolling_spin := slide * (1.0 - s.friction) / (H * it.radius)
+	it.spin += (rolling_spin - it.spin) * SPIN_GRIP
 
 
 ## If a heavy pile squeezed an item's center into a solid tile, move it out through the
@@ -410,6 +434,14 @@ func _resolve_pair(a: Item, b: Item) -> void:
 	a.y -= ny * push
 	b.x += nx * push
 	b.y += ny * push
+	_add_push(a, -nx * push, -ny * push)
+	_add_push(b, nx * push, ny * push)
+
+	# Whatever rests on a carried item is carried too (b is above a when ny < 0).
+	if ny < 0.0 and _is_carried(a):
+		b.carried_tick = tick
+	elif ny > 0.0 and _is_carried(b):
+		a.carried_tick = tick
 
 	# Friction lets a belt carry a small pile, not just the bottom layer, and lets piles heap.
 	var tnx := -ny
@@ -433,7 +465,8 @@ func _resolve_against_sleeper(a: Item, s: Item) -> void:
 	var dist := sqrt(d2)
 	var nx := dx / dist
 	var ny := dy / dist
-	if -(a.vx * nx + a.vy * ny) > WAKE_SPEED:
+	# Wake on a real impact, or when the sleeper sits on top of something being carried.
+	if -(a.vx * nx + a.vy * ny) > WAKE_SPEED or (ny > 0.0 and _is_carried(a)):
 		_wake(s)
 		_resolve_pair(s, a)
 		return
@@ -441,11 +474,28 @@ func _resolve_against_sleeper(a: Item, s: Item) -> void:
 		return
 	a.x += nx * (rsum - dist)
 	a.y += ny * (rsum - dist)
+	_add_push(a, nx * (rsum - dist), ny * (rsum - dist))
 	var tnx := -ny
 	var tny := nx
 	var slide := (a.x - a.step_x) * tnx + (a.y - a.step_y) * tny
 	a.x -= tnx * slide * ITEM_FRICTION
 	a.y -= tny * slide * ITEM_FRICTION
+
+
+func _add_push(it: Item, dx: float, dy: float) -> void:
+	if dx > 0.0:
+		it.push_right += dx
+	else:
+		it.push_left -= dx
+	if dy > 0.0:
+		it.push_down += dy
+	else:
+		it.push_up -= dy
+
+
+## Carried this tick or the one before (substeps of a new tick haven't re-marked it yet).
+func _is_carried(it: Item) -> bool:
+	return it.carried_tick >= tick - 1
 
 
 func _wake(it: Item) -> void:
@@ -459,7 +509,7 @@ func _update_sleep() -> void:
 	for it in items:
 		if it.sleeping:
 			continue
-		if it.belt_tick == tick:
+		if _is_carried(it):
 			it.still_ticks = 0
 			continue
 		var mx := it.x - it.prev_x
