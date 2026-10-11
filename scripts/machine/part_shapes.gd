@@ -5,7 +5,7 @@ class_name PartShapes
 ##
 ## Returns {"rects": Array[Rect2], "polygons": Array[PackedVector2Array], "circles": Array}
 ## where each circle is [center: Vector2, radius: float]. Shapes may reach outside the cell
-## (a sorter's hood rises above it).
+## (a sorter's roof is in the cell above).
 
 const T := PartDefs.TILE
 
@@ -19,8 +19,10 @@ static func of(p: Part) -> Dictionary:
 		&"conveyor":
 			rects.append(Rect2(0, 0, T, PartGeometry.CONVEYOR_HEIGHT))
 		&"sorter":
+			# The conveyor, and the roof over the passage.
 			var hood := PartGeometry.SORTER_HOOD
-			rects.append(Rect2(0, -hood, T, PartGeometry.CONVEYOR_HEIGHT + hood))
+			rects.append(Rect2(0, 0, T, PartGeometry.CONVEYOR_HEIGHT))
+			rects.append(Rect2(0, -hood, T, hood - PartGeometry.SORTER_PASSAGE))
 		&"ramp":
 			if p.variant == 1:
 				polygons.append(PackedVector2Array([Vector2(T, 0), Vector2(T, T), Vector2(0, T)]))

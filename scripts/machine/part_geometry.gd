@@ -13,10 +13,11 @@ const HOPPER_GAP := 18.0
 const PANEL_THICKNESS := 6.0
 ## Conveyors are half a tile tall, with the belt on top.
 const CONVEYOR_HEIGHT := 16.0
-## A sorter is a conveyor-sized box with a hood rising this far above the belt line.
-const SORTER_HOOD := 6.0
-## How far in front of its mouth, and above its hood, a sorter takes items in.
-const SORTER_REACH := 10.0
+## A sorter is a conveyor with a box over it, rising a whole tile above the belt line (into the
+## cell above, which it takes up), with a passage this tall through it along the belt.
+const SORTER_HOOD := 32.0
+const SORTER_PASSAGE := 24.0
+## How far above its roof a sorter takes in items that land there.
 const SORTER_TOP_REACH := 18.0
 
 ## Crushers are nothing but toothed rollers: a large crusher's two each fill a tile, a small
@@ -67,7 +68,7 @@ static func build(machine: Machine) -> Simulation:
 			&"conveyor":
 				_add_conveyor(sim, machine, p)
 			&"sorter":
-				_add_sorter(sim, p, x0, y0, x1)
+				_add_sorter(sim, machine, p, x0, y0, x1)
 			&"panel":
 				_add_panel(sim, machine, p)
 			&"heating_coil", &"bellows", &"insulation":
@@ -129,7 +130,7 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 			# Only its top: the belt runs the full width, but the body is half a tile tall.
 			return side == Vector2i.UP
 		&"sorter":
-			# Its hood covers its top; its sides only reach halfway down.
+			# Its roof covers its top; its sides have the passage in them.
 			return side == Vector2i.UP
 		&"panel":
 			return side == PANEL_SIDES[part.variant]
@@ -141,22 +142,30 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 	return false
 
 
-## A closed box in a belt line. Everything goes in through its mouth (the side the belt comes
-## from) or the top of its hood, out of sight; matches drop out the bottom, the rest come out
-## the far side onto the next belt. Being solid and seamless, a row of sorters can't snag.
-static func _add_sorter(sim: Simulation, p: Part, x0: float, y0: float, x1: float) -> void:
-	sim.set_solid(p.cell, Simulation.Solid.TOP_HALF)
+## A conveyor with a box over it. Items ride in through the passage, out of sight; halfway
+## through, ones of the sorter's material are taken out and drop out the bottom, and the rest
+## ride on out the far side. What lands on its roof is taken in too. A row of sorters makes one
+## smooth passage.
+static func _add_sorter(sim: Simulation, machine: Machine, p: Part, x0: float, y0: float, x1: float) -> void:
+	_add_conveyor(sim, machine, p)
 	var top := y0 - SORTER_HOOD
-	var bottom := y0 + CONVEYOR_HEIGHT
+	var roof := y0 - SORTER_PASSAGE
 	_solid(sim, x0, top, x1, top)
-	_solid(sim, x1, top, x1, bottom)
-	_solid(sim, x1, bottom, x0, bottom)
-	_solid(sim, x0, bottom, x0, top)
-	var speed := belt_speed(p)
-	var intake := Rect2(x0 - SORTER_REACH, top - SORTER_TOP_REACH, x1 - x0 + SORTER_REACH, bottom - top + SORTER_TOP_REACH)
-	if speed < 0.0:
-		intake.position.x = x0
-	sim.add_sorter(intake, p.filter, x1 if speed > 0.0 else x0, y0, speed, (x0 + x1) * 0.5, bottom)
+	_solid(sim, x1, roof, x0, roof)
+	if not _roof_continues(machine, p, Vector2i.RIGHT):
+		_solid(sim, x1, top, x1, roof)
+	if not _roof_continues(machine, p, Vector2i.LEFT):
+		_solid(sim, x0, roof, x0, top)
+	var box := Rect2(x0, top, x1 - x0, y0 + CONVEYOR_HEIGHT - top)
+	sim.add_sorter(box, roof, y0, SORTER_TOP_REACH, p.filter, belt_speed(p))
+
+
+## True if the sorter's roof runs on into the next sorter's, or into a solid side, toward `side`.
+static func _roof_continues(machine: Machine, p: Part, side: Vector2i) -> bool:
+	var next := machine.part_at(p.cell + side)
+	if next != null and next.type == &"sorter":
+		return true
+	return has_full_edge(machine, p.cell + Vector2i.UP + side, -side)
 
 
 ## A half-tile box along the top of its tile with a belt surface. Its ends are left off where
@@ -178,7 +187,7 @@ static func _add_conveyor(sim: Simulation, machine: Machine, p: Part) -> void:
 
 static func _belt_continues(machine: Machine, cell: Vector2i, side: Vector2i) -> bool:
 	var next := machine.part_at(cell)
-	if next != null and (next.type == &"conveyor" or next.type == &"sorter"):
+	if next != null and (next.type == &"conveyor" or (next.type == &"sorter" and next.cell == cell)):
 		return true
 	return has_full_edge(machine, cell, side)
 

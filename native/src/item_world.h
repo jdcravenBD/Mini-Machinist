@@ -2,8 +2,8 @@
 
 // Deterministic physics for Mini Machinist: items as convex polygons that slide, tip, stack
 // and settle, plus static segments, belts, spawners, crushers, sorters and bins (this file
-// and item_world.cpp); heat (item_world.cpp); and a pixel layer of molten and hardened metal
-// that flows like falling sand (pixel_world.cpp).
+// and item_world.cpp); heat (item_world.cpp); and a pixel layer of molten metal that flows like
+// falling sand (pixel_world.cpp).
 //
 // Position-based (XPBD style): each substep predicts where items go, finds contact points
 // where outlines overlap, pushes them apart at those points (which also turns them), then
@@ -35,9 +35,9 @@ class ItemWorld : public RefCounted {
 public:
 	static constexpr int MAX_CORNERS = 8;
 
-	// Every world pixel is empty, part wall, or metal: molten (flows like falling sand,
-	// heavier iron sinks through slag) or hardened (stays put, and items land on it).
-	enum Pixel : uint8_t { PIX_EMPTY = 0, PIX_WALL = 1, PIX_IRON = 2, PIX_SLAG = 3, PIX_SOLID_IRON = 4, PIX_SOLID_SLAG = 5 };
+	// Every world pixel is empty, part wall, or molten metal, which flows like falling sand
+	// and never hardens; heavier iron sinks through slag like water under oil.
+	enum Pixel : uint8_t { PIX_EMPTY = 0, PIX_WALL = 1, PIX_IRON = 2, PIX_SLAG = 3 };
 
 	// One item outline at one material and size; items point at a type.
 	struct ItemType {
@@ -93,16 +93,20 @@ public:
 		std::map<int, int> by_kind_size;
 	};
 
-	// A closed box on a belt line. Items that ride or drop into its mouth vanish inside; after a
-	// moment each comes out either the bottom (its material matches `filter`) or the far side
-	// onto the next belt, in the order they went in.
+	// A tall box on a belt line with a passage through it (from pass_top down to the belt at
+	// belt_y). Items ride in through the passage, hidden by the box; one of the `filter`
+	// material is taken out at the middle and drops out the bottom, the rest ride on through.
+	// Items landing on its roof are taken in too, and come out the bottom or onto the belt
+	// inside, in the order they went in.
 	struct Sorter {
-		double min_x, min_y, max_x, max_y;
+		// The box.
+		double x0, y0, x1, y1;
+		double pass_top, belt_y;
+		// How far above the roof items are taken in.
+		double top_reach;
 		int filter;
-		// Far-side exit: an edge x (items come out beyond it), the belt's top y and speed.
-		double out_x, out_y, out_vx;
-		// Bottom exit: center x and the box's bottom y.
-		double drop_x, drop_y;
+		// The belt's speed (its sign is the way items ride through).
+		double out_vx;
 		struct Held {
 			Body body;
 			int64_t release;
@@ -150,7 +154,7 @@ public:
 	int add_bin(double p_min_x, double p_min_y, double p_max_x, double p_max_y);
 	int add_crusher(int p_takes, int p_makes, int p_pieces, int p_duration, double p_min_x, double p_min_y, double p_max_x, double p_max_y, double p_press_y, double p_exit_x, double p_exit_y);
 	int add_item(int p_type, double p_x, double p_y, double p_c, double p_s, double p_vx, double p_vy);
-	int add_sorter(double p_min_x, double p_min_y, double p_max_x, double p_max_y, int p_filter, double p_out_x, double p_out_y, double p_out_vx, double p_drop_x, double p_drop_y);
+	int add_sorter(double p_x0, double p_y0, double p_x1, double p_y1, double p_pass_top, double p_belt_y, double p_top_reach, int p_filter, double p_out_vx);
 
 	// Heat.
 	void heat_fill_rect(double p_x0, double p_y0, double p_x1, double p_y1, int p_material);
@@ -177,6 +181,7 @@ public:
 	PackedByteArray chunk_image(int p_chunk) const;
 	int chunk_columns() const { return chunk_cols; }
 	int chunk_size() const { return CHUNK; }
+	PackedByteArray wall_mask() const;
 
 	// Running.
 	void step();
@@ -224,8 +229,10 @@ private:
 	static constexpr double SUPPORT_SLOPE = 0.3;
 	static constexpr int PASS_TICKS = 6;
 	static constexpr double BELT_PRESS = 0.15;
-	// How many items a sorter holds at once, and how long each stays inside.
+	// How many items a sorter takes in through its roof at once, how many it holds in all, and
+	// how long each stays inside.
 	static constexpr int SORTER_HOLDS = 3;
+	static constexpr int SORTER_MAX_HELD = 8;
 	static constexpr int SORTER_TICKS = 12;
 
 	// Heat: a grid of HEAT_CELL-pixel cells, each made of a material that sets how well it
@@ -247,12 +254,6 @@ private:
 	static constexpr double GLOW_START = 450.0;
 
 	static constexpr int CHUNK = 64;
-	// Molten metal hardens below its freezing point and hardened metal melts above its
-	// melting point (the gap stops it flickering between the two).
-	static constexpr double IRON_FREEZE = 1400.0;
-	static constexpr double IRON_MELT = 1500.0;
-	static constexpr double SLAG_FREEZE = 1150.0;
-	static constexpr double SLAG_MELT = 1250.0;
 	// A metal pixel closes this share of the gap to its heat cell's temperature per tick, and
 	// the heat cell moves PIXEL_HEAT_SHARE of that the other way (molten metal heats what holds it).
 	static constexpr double PIXEL_HEAT_RATE = 0.01;
@@ -268,13 +269,9 @@ private:
 	// molten iron (rock and ore float on iron), and slowed each tick.
 	static constexpr double BUOYANCY = 1.6;
 	static constexpr double LIQUID_DRAG = 0.9;
-	// How far up a molten pixel looks for room when an item pushes into it.
-	static constexpr int DISPLACE_REACH = 24;
 	// A skimmer takes this many slag pixels a tick, and drops a lump per SKIM_LUMP taken.
 	static constexpr int SKIM_PER_TICK = 3;
 	static constexpr int SKIM_LUMP = 35;
-	// Hardened metal's collision edges are rebuilt this often (in ticks) while it changes.
-	static constexpr int SOLID_REBUILD_TICKS = 8;
 
 	// SOLID_TOP_HALF fills the top half of its tile (a conveyor).
 	enum Solid { SOLID_NONE = 0, SOLID_BOX = 1, SOLID_RAMP_DOWN_RIGHT = 2, SOLID_RAMP_DOWN_LEFT = 3, SOLID_TOP_HALF = 4 };
@@ -321,12 +318,8 @@ private:
 	std::vector<int> item_pixels;
 	int chunk_cols = 0, chunk_rows = 0;
 	std::vector<uint8_t> chunk_dirty;
-	// Bounding boxes of molten pixels and of hardened ones (x0 > x1 when there are none).
+	// Bounding box of molten pixels (x0 > x1 when there are none).
 	int liq_x0 = 1, liq_y0 = 1, liq_x1 = 0, liq_y1 = 0;
-	int sol_x0 = 1, sol_y0 = 1, sol_x1 = 0, sol_y1 = 0;
-	bool solids_changed = false;
-	// The parts' walls; hardened metal's edges are added on top of these.
-	std::vector<Segment> base_segments;
 	// Per material kind; 0 never melts.
 	std::vector<double> melt_points;
 	std::vector<Skimmer> skimmers;
@@ -399,9 +392,6 @@ private:
 	void _wake_near(double x, double y);
 
 	void _index_segments();
-	// A plain wall segment, and straight runs of segments joined (see merge_runs).
-	static Segment make_wall(double ax, double ay, double bx, double by);
-	static std::vector<Segment> merge_walls(const std::vector<Segment> &input);
 	void _step_pixels();
 	void _touch_liquid_items();
 	void _melt_items();
@@ -412,7 +402,6 @@ private:
 	void _move_pixel(int from, int to);
 	void _pixel_heat();
 	void _run_skimmers();
-	void _rebuild_solid_edges();
 	void _grow_box(int &x0, int &y0, int &x1, int &y1, int x, int y);
 	void _dirty(int x, int y);
 	template <typename Inside>

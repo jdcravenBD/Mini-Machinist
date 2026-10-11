@@ -21,8 +21,7 @@ func _init() -> void:
 	crushing.place(&"panel", Vector2i(9, 6), 1)
 	crushing.place(&"panel", Vector2i(9, 7), 1)
 	crushing.place(&"bin", Vector2i(10, 9))
-	# Ore dropping into a box of panels over coils: it melts, the slag goes out a skimmer, and
-	# what spills over the sides hardens.
+	# Ore dropping into a box of panels over coils: it melts, and the slag goes out a skimmer.
 	var melting := Machine.new()
 	melting.place(&"spawner", Vector2i(10, 4))
 	for x in range(9, 12):
@@ -62,5 +61,5 @@ func _run(machine: Machine) -> Dictionary:
 	for chunk in chunks:
 		pixels.append_array(sim.world.chunk_image(chunk))
 	var px := sim.pixel_counts()
-	var counts := "%d iron, %d slag, %d hardened" % [px["iron"], px["slag"], px["solid_iron"] + px["solid_slag"]]
+	var counts := "%d iron, %d slag" % [px["iron"], px["slag"]]
 	return {"snapshot": sim.snapshot(), "delivered": sim.delivered, "items": sim.item_count(), "lost": sim.lost, "pixels": pixels, "counts": counts}

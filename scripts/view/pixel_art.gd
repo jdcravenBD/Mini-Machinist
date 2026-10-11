@@ -131,16 +131,19 @@ static func _make_part(p: Part) -> Dictionary:
 			art.letter = "<" if p.variant == 1 else ">"
 			art.letter_scale = 1
 		&"sorter":
-			# A dark mouth on the side the belt comes from, and a dot showing what it drops.
+			# One closed-looking box (it's drawn over the items riding through it), with dark
+			# openings where the passage goes in and out, an arrow for the belt, and a dot
+			# showing what it drops.
 			var hood := PartGeometry.SORTER_HOOD
 			var height := PartGeometry.CONVEYOR_HEIGHT + hood
 			art.resize(T, int(height), Vector2(0, -hood))
-			art.letter_scale = 1
-			var mouth_x := 3 if p.variant == 0 else T - 6
-			art.patches.append([Rect2(mouth_x, 3 - hood, 3, height - 6), art.color.darkened(0.7)])
+			art.rects = [Rect2(0, -hood, T, height)]
+			art.letter_at = Vector2(T * 0.5, -hood * 0.42)
+			var opening := Rect2(0, 3 - PartGeometry.SORTER_PASSAGE, 3, PartGeometry.SORTER_PASSAGE - 3)
+			art.patches.append([opening, art.color.darkened(0.7)])
+			art.patches.append([Rect2(Vector2(T - 3, opening.position.y), opening.size), art.color.darkened(0.7)])
 			if ItemDefs.DEFS.has(p.filter):
-				var dot_x := T - 9 if p.variant == 0 else 5
-				art.patches.append([Rect2(dot_x, 4 - hood, 4, 4), ItemDefs.DEFS[p.filter]["color"]])
+				art.patches.append([Rect2(T * 0.5 - 2, 4, 4, 4), ItemDefs.DEFS[p.filter]["color"]])
 		&"ramp":
 			art.letter_at = Vector2(T * 0.68, T * 0.7) if p.variant == 1 else Vector2(T * 0.32, T * 0.7)
 			art.letter_scale = 1

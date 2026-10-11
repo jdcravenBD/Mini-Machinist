@@ -166,21 +166,12 @@ void ItemWorld::set_solid(int p_cx, int p_cy, int p_kind) {
 	}
 }
 
-ItemWorld::Segment ItemWorld::make_wall(double ax, double ay, double bx, double by) {
-	return make_segment(ax, ay, bx, by, 0.0, 0.6, -1, false);
-}
-
-std::vector<ItemWorld::Segment> ItemWorld::merge_walls(const std::vector<Segment> &input) {
-	return merge_runs(input);
-}
-
 void ItemWorld::add_segment(double p_ax, double p_ay, double p_bx, double p_by, double p_speed, double p_friction, int p_passes, bool p_belt) {
 	segments.push_back(make_segment(p_ax, p_ay, p_bx, p_by, p_speed, p_friction, p_passes, p_belt));
 }
 
 void ItemWorld::finish_build() {
-	base_segments = merge_runs(segments);
-	segments = base_segments;
+	segments = merge_runs(segments);
 	_index_segments();
 }
 
@@ -281,18 +272,17 @@ int ItemWorld::add_crusher(int p_takes, int p_makes, int p_pieces, int p_duratio
 	return (int)crushers.size() - 1;
 }
 
-int ItemWorld::add_sorter(double p_min_x, double p_min_y, double p_max_x, double p_max_y, int p_filter, double p_out_x, double p_out_y, double p_out_vx, double p_drop_x, double p_drop_y) {
+int ItemWorld::add_sorter(double p_x0, double p_y0, double p_x1, double p_y1, double p_pass_top, double p_belt_y, double p_top_reach, int p_filter, double p_out_vx) {
 	Sorter so;
-	so.min_x = p_min_x;
-	so.min_y = p_min_y;
-	so.max_x = p_max_x;
-	so.max_y = p_max_y;
+	so.x0 = p_x0;
+	so.y0 = p_y0;
+	so.x1 = p_x1;
+	so.y1 = p_y1;
+	so.pass_top = p_pass_top;
+	so.belt_y = p_belt_y;
+	so.top_reach = p_top_reach;
 	so.filter = p_filter;
-	so.out_x = p_out_x;
-	so.out_y = p_out_y;
 	so.out_vx = p_out_vx;
-	so.drop_x = p_drop_x;
-	so.drop_y = p_drop_y;
 	sorters.push_back(so);
 	return (int)sorters.size() - 1;
 }
@@ -638,17 +628,24 @@ void ItemWorld::_run_crushers() {
 	}
 }
 
-// Takes in whatever reached each sorter's mouth (while it has room) and lets the first one
-// inside back out once its time is up and its exit is clear.
+// Takes in items of each sorter's material once they're halfway through its passage, and
+// whatever lands on its roof, then lets the first one inside back out once its time is up and
+// its exit is clear: out the bottom if it's the sorter's material, else onto the belt inside.
 void ItemWorld::_run_sorters() {
 	for (Sorter &so : sorters) {
-		for (size_t i = 0; i < items.size() && (int)so.inside.size() < SORTER_HOLDS;) {
+		double mid = (so.x0 + so.x1) * 0.5;
+		for (size_t i = 0; i < items.size() && (int)so.inside.size() < SORTER_MAX_HELD;) {
 			const Body &it = items[i];
-			if (it.x > so.min_x && it.x < so.max_x && it.y > so.min_y && it.y < so.max_y) {
+			bool match = types[it.type].kind == so.filter;
+			bool over = it.x > so.x0 && it.x < so.x1;
+			bool on_roof = over && it.y > so.y0 - so.top_reach && it.y < so.y0 && (int)so.inside.size() < SORTER_HOLDS;
+			bool past_middle = so.out_vx >= 0.0 ? it.x >= mid : it.x <= mid;
+			bool in_passage = over && match && past_middle && it.y > so.pass_top && it.y < so.belt_y;
+			if (on_roof || in_passage) {
 				Sorter::Held held;
 				held.body = it;
 				held.release = tick + SORTER_TICKS;
-				held.match = types[it.type].kind == so.filter;
+				held.match = match;
 				so.inside.push_back(held);
 				double x = it.x, y = it.y;
 				items.erase(items.begin() + i);
@@ -662,17 +659,13 @@ void ItemWorld::_run_sorters() {
 		}
 		const Sorter::Held &next = so.inside.front();
 		double r = types[next.body.type].radius;
-		double x, y, vx, vy;
+		double x = mid, y, vx = 0.0, vy = 0.0;
 		if (next.match) {
-			x = so.drop_x;
-			y = so.drop_y + r + 0.5;
-			vx = 0.0;
+			y = so.y1 + r + 0.5;
 			vy = 40.0;
 		} else {
-			x = so.out_x + (so.out_vx >= 0.0 ? r + 0.5 : -r - 0.5);
-			y = so.out_y - r - 0.5;
+			y = so.belt_y - r - 0.5;
 			vx = so.out_vx;
-			vy = 0.0;
 		}
 		if (_is_blocked_near(x, y, r * 2.0)) {
 			continue;
@@ -1684,7 +1677,7 @@ void ItemWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_bin", "min_x", "min_y", "max_x", "max_y"), &ItemWorld::add_bin);
 	ClassDB::bind_method(D_METHOD("add_crusher", "takes", "makes", "pieces", "duration", "min_x", "min_y", "max_x", "max_y", "press_y", "exit_x", "exit_y"), &ItemWorld::add_crusher);
 	ClassDB::bind_method(D_METHOD("add_item", "type", "x", "y", "c", "s", "vx", "vy"), &ItemWorld::add_item);
-	ClassDB::bind_method(D_METHOD("add_sorter", "min_x", "min_y", "max_x", "max_y", "filter", "out_x", "out_y", "out_vx", "drop_x", "drop_y"), &ItemWorld::add_sorter);
+	ClassDB::bind_method(D_METHOD("add_sorter", "x0", "y0", "x1", "y1", "pass_top", "belt_y", "top_reach", "filter", "out_vx"), &ItemWorld::add_sorter);
 	ClassDB::bind_method(D_METHOD("type_radius", "type"), &ItemWorld::type_radius);
 	ClassDB::bind_method(D_METHOD("heat_fill_rect", "x0", "y0", "x1", "y1", "material"), &ItemWorld::heat_fill_rect);
 	ClassDB::bind_method(D_METHOD("heat_fill_polygon", "points", "material"), &ItemWorld::heat_fill_polygon);
@@ -1705,6 +1698,7 @@ void ItemWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("chunk_image", "chunk"), &ItemWorld::chunk_image);
 	ClassDB::bind_method(D_METHOD("chunk_columns"), &ItemWorld::chunk_columns);
 	ClassDB::bind_method(D_METHOD("chunk_size"), &ItemWorld::chunk_size);
+	ClassDB::bind_method(D_METHOD("wall_mask"), &ItemWorld::wall_mask);
 	ClassDB::bind_method(D_METHOD("step"), &ItemWorld::step);
 	ClassDB::bind_method(D_METHOD("get_tick"), &ItemWorld::get_tick);
 	ClassDB::bind_method(D_METHOD("set_tick", "tick"), &ItemWorld::set_tick);

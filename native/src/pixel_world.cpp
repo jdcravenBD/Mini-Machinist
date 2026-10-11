@@ -1,15 +1,14 @@
-// The pixel layer: molten and hardened metal, one material per world pixel.
+// The pixel layer: molten metal, one material per world pixel.
 //
 // Molten metal flows like falling sand: each tick, from the bottom row up, a molten pixel
 // falls, slides down a slope, or spreads sideways toward level. Heavier iron sinks through
-// slag, so slag ends up floating on top. Items are rasterized in each tick as obstacles the
-// metal flows around (and pushes up out of the way when an item sinks in). Metal pixels trade
-// heat with the heat map, harden when they cool below their freezing point, and melt again
-// when heated back past their melting point. Hardened metal gets collision edges so items
-// land on it.
+// slag (and slag rises through iron), like water under oil, so slag ends up on top. Items are
+// rasterized in each tick as obstacles the metal flows around. Metal pixels trade heat with
+// the heat map but never harden.
 //
-// Determinism: rows are visited bottom-up and the sideways direction alternates by tick, so
-// every choice depends only on the tick and positions; no randomness.
+// Determinism: rows are visited bottom-up, alternating direction by tick, and each pixel
+// remembers which way it flows sideways, so every choice depends only on the tick and
+// positions; no randomness.
 
 #include "item_world.h"
 
@@ -45,10 +44,6 @@ bool inside_polygon(double x, double y, const double *pts, int n) {
 
 bool is_molten(uint8_t m) {
 	return m == ItemWorld::PIX_IRON || m == ItemWorld::PIX_SLAG;
-}
-
-bool is_hardened(uint8_t m) {
-	return m == ItemWorld::PIX_SOLID_IRON || m == ItemWorld::PIX_SOLID_SLAG;
 }
 
 } // namespace
@@ -137,14 +132,12 @@ void ItemWorld::_step_pixels() {
 	_flow_liquids();
 	_pixel_heat();
 	_run_skimmers();
-	if (solids_changed && tick % SOLID_REBUILD_TICKS == 0) {
-		_rebuild_solid_edges();
-	}
 }
 
 // Marks where items near molten metal sit, so the metal flows around them. An item sinking
-// into molten metal pushes it up out of the way, picks up its heat, is slowed, and is lifted
-// in proportion to how much of it is in molten iron (ore and rock float on iron).
+// into molten metal picks up its heat, is slowed, and is lifted in proportion to how much of
+// it is in molten iron (ore and rock float on iron). The metal it overlaps stays where it is,
+// hidden behind it, rather than being thrown up over it.
 void ItemWorld::_touch_liquid_items() {
 	for (int i : item_pixels) {
 		pix_item[i] = 0;
@@ -153,7 +146,7 @@ void ItemWorld::_touch_liquid_items() {
 	if (liq_x0 > liq_x1) {
 		return;
 	}
-	int reach = DISPLACE_REACH;
+	int reach = 2;
 	for (Body &it : items) {
 		const ItemType &t = types[it.type];
 		if (it.x + t.radius < liq_x0 - reach || it.x - t.radius > liq_x1 + reach || it.y + t.radius < liq_y0 - reach || it.y - t.radius > liq_y1 + reach) {
@@ -181,17 +174,6 @@ void ItemWorld::_touch_liquid_items() {
 					in_metal++;
 					in_iron += pix[i] == PIX_IRON ? 1 : 0;
 					hottest = std::max(hottest, (double)pix_temp[i]);
-					// Push the metal up its column to the first free pixel.
-					for (int up = 1; up <= reach && y - up >= 0; up++) {
-						int j = i - up * pix_w;
-						if (pix[j] == PIX_EMPTY && !pix_item[j]) {
-							_move_pixel(i, j);
-							break;
-						}
-						if (pix[j] == PIX_WALL || is_hardened(pix[j])) {
-							break;
-						}
-					}
 				}
 				if (pix[i] == PIX_EMPTY) {
 					pix_item[i] = 1;
@@ -321,9 +303,14 @@ bool ItemWorld::_flow_one(int x, int y) {
 		return true;
 	}
 	int first = pix_dir[i];
+	if (m == PIX_SLAG && y > 0 && pix[i - pix_w] == PIX_IRON && pix_moved[i - pix_w] != tick) {
+		// Iron resting on slag: they trade places, so slag rises to the top.
+		_move_pixel(i, i - pix_w);
+		return true;
+	}
 	for (int d : { first, -first }) {
 		int nx = x + d;
-		if (nx >= 0 && nx < pix_w && free_at(below + d)) {
+		if (nx >= 0 && nx < pix_w && (free_at(below + d) || (m == PIX_IRON && pix[below + d] == PIX_SLAG && pix_moved[below + d] != tick))) {
 			pix_dir[i] = (int8_t)d;
 			_move_pixel(i, below + d);
 			return true;
@@ -365,25 +352,24 @@ void ItemWorld::_move_pixel(int from, int to) {
 	_dirty(to % pix_w, to / pix_w);
 }
 
-// Metal pixels trade heat with their heat cell; molten metal that cools enough hardens and
-// hardened metal heated enough melts again.
+// Metal pixels trade heat with their heat cell (and the cells they're in pass heat like metal).
 void ItemWorld::_pixel_heat() {
-	int x0 = std::min(liq_x0 > liq_x1 ? pix_w : liq_x0, sol_x0 > sol_x1 ? pix_w : sol_x0);
-	int x1 = std::max(liq_x0 > liq_x1 ? -1 : liq_x1, sol_x0 > sol_x1 ? -1 : sol_x1);
-	int y0 = std::min(liq_x0 > liq_x1 ? pix_h : liq_y0, sol_x0 > sol_x1 ? pix_h : sol_y0);
-	int y1 = std::max(liq_x0 > liq_x1 ? -1 : liq_y1, sol_x0 > sol_x1 ? -1 : sol_y1);
+	if (liq_x0 > liq_x1) {
+		heat_eff = heat_mat;
+		return;
+	}
 	heat_eff = heat_mat;
-	for (int y = y0; y <= y1; y++) {
-		for (int x = x0; x <= x1; x++) {
+	for (int y = liq_y0; y <= liq_y1; y++) {
+		for (int x = liq_x0; x <= liq_x1; x++) {
 			int i = y * pix_w + x;
-			uint8_t m = pix[i];
-			if (!is_molten(m) && !is_hardened(m)) {
+			if (!is_molten(pix[i])) {
 				continue;
 			}
 			int c = _heat_cell(x + 0.5, y + 0.5);
 			if (c < 0) {
 				continue;
 			}
+			_dirty(x, y);
 			if (heat_eff[c] == HEAT_AIR) {
 				heat_eff[c] = HEAT_METAL;
 			}
@@ -392,28 +378,6 @@ void ItemWorld::_pixel_heat() {
 			t += shift;
 			heat[c] -= shift * PIXEL_HEAT_SHARE;
 			pix_temp[i] = (float)t;
-			if (m == PIX_IRON && t < IRON_FREEZE) {
-				pix[i] = PIX_SOLID_IRON;
-			} else if (m == PIX_SLAG && t < SLAG_FREEZE) {
-				pix[i] = PIX_SOLID_SLAG;
-			} else if (m == PIX_SOLID_IRON && t >= IRON_MELT) {
-				pix[i] = PIX_IRON;
-			} else if (m == PIX_SOLID_SLAG && t >= SLAG_MELT) {
-				pix[i] = PIX_SLAG;
-			} else {
-				if (is_molten(m) || t > GLOW_START) {
-					_dirty(x, y);
-				}
-				continue;
-			}
-			// Changed between molten and hardened.
-			solids_changed = true;
-			if (is_hardened(pix[i])) {
-				_grow_box(sol_x0, sol_y0, sol_x1, sol_y1, x, y);
-			} else {
-				_grow_box(liq_x0, liq_y0, liq_x1, liq_y1, x, y);
-			}
-			_dirty(x, y);
 		}
 	}
 }
@@ -444,7 +408,7 @@ void ItemWorld::_run_skimmers() {
 			double x = dir > 0.0 ? sk.x1 + r + 0.5 : sk.x0 - r - 0.5;
 			Body lump;
 			_init_body(lump, type, x, (sk.y0 + sk.y1) * 0.5, 1.0, 0.0);
-			lump.temp = SLAG_FREEZE;
+			lump.temp = 1150.0;
 			lump.vx = dir * 30.0;
 			items.push_back(lump);
 			sk.taken -= SKIM_LUMP;
@@ -452,49 +416,6 @@ void ItemWorld::_run_skimmers() {
 			sk.lumps++;
 		}
 	}
-}
-
-// Hardened metal's outline (pixel edges facing anything that isn't hardened metal or a part's
-// wall) becomes collision segments, joined into straight runs, on top of the parts' walls.
-void ItemWorld::_rebuild_solid_edges() {
-	solids_changed = false;
-	std::vector<Segment> edges;
-	auto open = [&](int x, int y) {
-		if (x < 0 || y < 0 || x >= pix_w || y >= pix_h) {
-			return true;
-		}
-		uint8_t m = pix[y * pix_w + x];
-		return !is_hardened(m) && m != PIX_WALL;
-	};
-	int nx0 = 1, ny0 = 1, nx1 = 0, ny1 = 0;
-	for (int y = std::max(0, sol_y0); y <= std::min(pix_h - 1, sol_y1); y++) {
-		for (int x = std::max(0, sol_x0); x <= std::min(pix_w - 1, sol_x1); x++) {
-			if (!is_hardened(pix[y * pix_w + x])) {
-				continue;
-			}
-			_grow_box(nx0, ny0, nx1, ny1, x, y);
-			if (open(x, y - 1)) {
-				edges.push_back(make_wall(x, y, x + 1, y));
-			}
-			if (open(x, y + 1)) {
-				edges.push_back(make_wall(x, y + 1, x + 1, y + 1));
-			}
-			if (open(x - 1, y)) {
-				edges.push_back(make_wall(x, y, x, y + 1));
-			}
-			if (open(x + 1, y)) {
-				edges.push_back(make_wall(x + 1, y, x + 1, y + 1));
-			}
-		}
-	}
-	sol_x0 = nx0;
-	sol_y0 = ny0;
-	sol_x1 = nx1;
-	sol_y1 = ny1;
-	segments = base_segments;
-	std::vector<Segment> merged = merge_walls(edges);
-	segments.insert(segments.end(), merged.begin(), merged.end());
-	_index_segments();
 }
 
 void ItemWorld::_grow_box(int &x0, int &y0, int &x1, int &y1, int x, int y) {
@@ -516,8 +437,8 @@ void ItemWorld::_dirty(int x, int y) {
 // --- Reading -------------------------------------------------------------------------
 
 Dictionary ItemWorld::pixel_counts() const {
-	int64_t count[6] = {};
-	double sum_y[6] = {};
+	int64_t count[4] = {};
+	double sum_y[4] = {};
 	for (int y = 0; y < pix_h; y++) {
 		for (int x = 0; x < pix_w; x++) {
 			uint8_t m = pix[(size_t)y * pix_w + x];
@@ -526,8 +447,8 @@ Dictionary ItemWorld::pixel_counts() const {
 		}
 	}
 	Dictionary d;
-	const char *names[6] = { "", "", "iron", "slag", "solid_iron", "solid_slag" };
-	for (int m = PIX_IRON; m <= PIX_SOLID_SLAG; m++) {
+	const char *names[4] = { "", "", "iron", "slag" };
+	for (int m = PIX_IRON; m <= PIX_SLAG; m++) {
 		d[names[m]] = count[m];
 		d[String(names[m]) + "_y"] = count[m] > 0 ? sum_y[m] / count[m] : 0.0;
 	}
@@ -539,6 +460,17 @@ int ItemWorld::pixel_at(int p_x, int p_y) const {
 		return PIX_EMPTY;
 	}
 	return pix[(size_t)p_y * pix_w + p_x];
+}
+
+// One byte per world pixel, 255 where a part is (for showing heat only on parts).
+PackedByteArray ItemWorld::wall_mask() const {
+	PackedByteArray data;
+	data.resize(pix.size());
+	uint8_t *w = data.ptrw();
+	for (size_t i = 0; i < pix.size(); i++) {
+		w[i] = pix[i] == PIX_WALL ? 255 : 0;
+	}
+	return data;
 }
 
 // The chunks whose look changed since the last call.
@@ -554,8 +486,7 @@ PackedInt32Array ItemWorld::dirty_chunks() {
 }
 
 // One CHUNK x CHUNK block of metal pixels as RGBA, or empty if it has no metal in it.
-// Molten iron glows by temperature, molten slag is a dull red-orange, hardened metal is gray
-// (iron) or near black (slag) and still glows while hot.
+// Molten iron glows by temperature (dulling as it cools), molten slag is a dull red-orange.
 PackedByteArray ItemWorld::chunk_image(int p_chunk) const {
 	PackedByteArray data;
 	int cx = p_chunk % chunk_cols, cy = p_chunk / chunk_cols;
@@ -575,21 +506,16 @@ PackedByteArray ItemWorld::chunk_image(int p_chunk) const {
 				glow_color(t, g);
 				if (m == PIX_IRON) {
 					glow_color(std::max(t, 1350.0), g);
-					c[0] = g[0];
-					c[1] = g[1];
-					c[2] = g[2];
+					double hot = std::min(1.0, std::max(0.0, (t - 600.0) / 800.0));
+					c[0] = 0.42 + (g[0] - 0.42) * hot;
+					c[1] = 0.38 + (g[1] - 0.38) * hot;
+					c[2] = 0.36 + (g[2] - 0.36) * hot;
 					c[3] = 1.0;
 				} else if (m == PIX_SLAG) {
-					double heat_share = std::min(1.0, std::max(0.0, (t - SLAG_FREEZE) / 600.0));
+					double heat_share = std::min(1.0, std::max(0.0, (t - 1150.0) / 600.0));
 					c[0] = 0.55 + 0.3 * heat_share;
 					c[1] = 0.20 + 0.15 * heat_share;
 					c[2] = 0.08;
-					c[3] = 1.0;
-				} else if (is_hardened(m)) {
-					double base = m == PIX_SOLID_IRON ? 0.55 : 0.23;
-					c[0] = base + g[0] * g[3] * 0.8;
-					c[1] = base + 0.02 + g[1] * g[3] * 0.8;
-					c[2] = base + 0.05 + g[2] * g[3] * 0.8;
 					c[3] = 1.0;
 				}
 				if (c[3] > 0.0) {

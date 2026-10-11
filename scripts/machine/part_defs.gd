@@ -39,7 +39,8 @@ const DEFS := {
 		"size": Vector2i(1, 1),
 		"variants": 2,
 		"color": Color(0.33, 0.45, 0.58),
-		"hint": "A closed box in a belt line: everything goes in its mouth, the material it's set to drop falls out the bottom, the rest comes out the far side. R flips, F changes what it drops.",
+		"rises": 1,
+		"hint": "A box over a belt: items ride through it, the material it's set to drop falls out the bottom halfway through, the rest rides on out the far side. Stands a tile tall. R flips, F changes what it drops.",
 	},
 	&"ramp": {
 		"name": "Ramp",
@@ -137,6 +138,17 @@ const DEFAULT_FILTER := &"rock"
 
 static func size_of(type: StringName) -> Vector2i:
 	return DEFS[type]["size"]
+
+
+## The grid cells a part at `cell` takes up: its size down and right from `cell`, plus the
+## cells above that its body rises into ("rises", a sorter's box).
+static func footprint(type: StringName, cell: Vector2i) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	var size := size_of(type)
+	for y in range(-int(DEFS[type].get("rises", 0)), size.y):
+		for x in size.x:
+			result.append(cell + Vector2i(x, y))
+	return result
 
 
 static func variant_count(type: StringName) -> int:

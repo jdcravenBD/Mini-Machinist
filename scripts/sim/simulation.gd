@@ -148,8 +148,8 @@ func add_liquid(area: Rect2, iron: bool, temp: float) -> void:
 	world.add_liquid(area.position.x, area.position.y, area.end.x, area.end.y, iron, temp)
 
 
-## How many pixels of each metal there are, and their average heights:
-## {"iron", "slag", "solid_iron", "solid_slag", and each with "_y"}.
+## How many pixels of molten iron and slag there are, and their average heights:
+## {"iron", "slag", "iron_y", "slag_y"}.
 func pixel_counts() -> Dictionary:
 	return world.pixel_counts()
 
@@ -172,12 +172,12 @@ static func _flat(points: PackedVector2Array, origin: Vector2) -> PackedFloat64A
 	return flat
 
 
-## A sorter box: items whose centers enter `intake` go inside, then drop out at `drop` (the
-## box's bottom middle) if their material is `filter`, or come out past `out_x` on the belt
-## line `out_y` moving at `out_vx`.
-func add_sorter(intake: Rect2, filter: StringName, out_x: float, out_y: float, out_vx: float, drop_x: float, drop_y: float) -> void:
-	world.add_sorter(intake.position.x, intake.position.y, intake.end.x, intake.end.y,
-			ItemDefs.ORDER.find(filter), out_x, out_y, out_vx, drop_x, drop_y)
+## A sorter: `box` with a passage through it from `pass_top` down to the belt at `belt_y`,
+## running at `belt_vx`. Items of the `filter` material are taken out halfway through and drop
+## out the bottom; items landing within `top_reach` above its roof are taken in too.
+func add_sorter(box: Rect2, pass_top: float, belt_y: float, top_reach: float, filter: StringName, belt_vx: float) -> void:
+	world.add_sorter(box.position.x, box.position.y, box.end.x, box.end.y, pass_top, belt_y, top_reach,
+			ItemDefs.ORDER.find(filter), belt_vx)
 
 
 func finish_build() -> void:

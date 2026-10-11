@@ -12,12 +12,9 @@ var _occupied := {}  # Vector2i -> Part
 
 
 func can_place(type: StringName, cell: Vector2i) -> bool:
-	var size := PartDefs.size_of(type)
-	for y in size.y:
-		for x in size.x:
-			var c := cell + Vector2i(x, y)
-			if c.x < 0 or c.y < 0 or c.x >= WIDTH or c.y >= HEIGHT or _occupied.has(c):
-				return false
+	for c in PartDefs.footprint(type, cell):
+		if c.x < 0 or c.y < 0 or c.x >= WIDTH or c.y >= HEIGHT or _occupied.has(c):
+			return false
 	return true
 
 

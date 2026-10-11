@@ -4,11 +4,26 @@ extends Node2D
 ##
 ## Everything is pixel art at 32 x 32 pixels per tile (see PixelArt), drawn without smoothing
 ## so pixels stay square. Items are pixel clumps that rotate as a picture with the rock.
+##
+## Layers, back to front: the grid and parts (this node), the glow of hot parts (a child,
+## masked to the parts' own pixels so empty space never glows), then molten metal, items,
+## sorter boxes (over the items riding through them) and the placement preview (a child).
 
 const T := PartDefs.TILE
 const BACKGROUND := Color(0.16, 0.155, 0.15)
 const GRID_LINE := Color(1, 1, 1, 0.05)
 const BORDER := Color(1, 1, 1, 0.18)
+## How strongly hot parts glow over their own look (1 hides their letters at full heat).
+const GLOW_STRENGTH := 0.6
+const GLOW_SHADER := """
+shader_type canvas_item;
+uniform sampler2D mask : filter_nearest;
+uniform float strength;
+void fragment() {
+	vec4 glow = texture(TEXTURE, UV);
+	COLOR = vec4(glow.rgb, glow.a * texture(mask, UV).r * strength);
+}
+"""
 
 var machine: Machine
 var sim: Simulation
@@ -22,6 +37,10 @@ var _multimeshes := {}
 ## The glow of hot solids, one pixel per heat cell, stretched over the world.
 var _heat_image: Image
 var _heat_texture: ImageTexture
+var _glow_layer := Node2D.new()
+var _glow_material := ShaderMaterial.new()
+var _glow_sim: Simulation
+var _front_layer := Node2D.new()
 ## Molten and hardened metal, one texture per block of the pixel layer that has any in it
 ## (chunk index -> ImageTexture), refreshed only where the metal changed.
 var _chunks := {}
@@ -30,10 +49,21 @@ var _chunks_sim: Simulation
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	var shader := Shader.new()
+	shader.code = GLOW_SHADER
+	_glow_material.shader = shader
+	_glow_material.set_shader_parameter("strength", GLOW_STRENGTH)
+	_glow_layer.material = _glow_material
+	_glow_layer.draw.connect(_draw_glow)
+	add_child(_glow_layer)
+	_front_layer.draw.connect(_draw_front)
+	add_child(_front_layer)
 
 
 func _process(_delta: float) -> void:
 	queue_redraw()
+	_glow_layer.queue_redraw()
+	_front_layer.queue_redraw()
 
 
 func _draw() -> void:
@@ -50,19 +80,34 @@ func _draw() -> void:
 
 	if machine:
 		for p in machine.parts:
-			_draw_part(p, Color.WHITE)
+			if p.type != &"sorter":
+				_draw_part(p, Color.WHITE)
 
+
+## Molten metal, items, then sorter boxes over the items riding through them, then the
+## placement preview.
+func _draw_front() -> void:
 	if sim:
-		_draw_heat()
 		_draw_metal()
 		_draw_items()
-	elif ghost != null:
+	if machine:
+		for p in machine.parts:
+			if p.type == &"sorter":
+				_draw_part(p, Color.WHITE, _front_layer)
+	if sim == null and ghost != null:
 		var tint := Color(1, 1, 1, 0.55) if ghost_valid else Color(1, 0.35, 0.35, 0.55)
-		_draw_part(ghost, tint)
+		_draw_part(ghost, tint, _front_layer)
 
 
-## Hot solids glow, from dark red through orange and yellow to near white.
-func _draw_heat() -> void:
+## Hot parts glow, from dark red through orange and yellow to near white, only on their own
+## pixels (the shader masks the glow with the parts' outline).
+func _draw_glow() -> void:
+	if sim == null:
+		return
+	if _glow_sim != sim:
+		_glow_sim = sim
+		var mask := Image.create_from_data(Machine.WIDTH * T, Machine.HEIGHT * T, false, Image.FORMAT_L8, sim.world.wall_mask())
+		_glow_material.set_shader_parameter("mask", ImageTexture.create_from_image(mask))
 	var columns: int = sim.world.heat_columns()
 	var rows: int = sim.world.heat_rows_count()
 	var data: PackedByteArray = sim.world.heat_image()
@@ -72,10 +117,10 @@ func _draw_heat() -> void:
 	else:
 		_heat_image.set_data(columns, rows, false, Image.FORMAT_RGBA8, data)
 		_heat_texture.update(_heat_image)
-	draw_texture_rect(_heat_texture, Rect2(Vector2.ZERO, Vector2(Machine.WIDTH * T, Machine.HEIGHT * T)), false)
+	_glow_layer.draw_texture_rect(_heat_texture, Rect2(Vector2.ZERO, Vector2(Machine.WIDTH * T, Machine.HEIGHT * T)), false)
 
 
-## Molten metal flowing and hardened metal lying where it set.
+## Molten metal, in blocks of pixels redrawn only where it changed.
 func _draw_metal() -> void:
 	if _chunks_sim != sim:
 		_chunks.clear()
@@ -94,7 +139,7 @@ func _draw_metal() -> void:
 			texture.update(image)
 	var columns: int = sim.world.chunk_columns()
 	for chunk in _chunks:
-		draw_texture(_chunks[chunk], Vector2(chunk % columns, chunk / columns) * size)
+		_front_layer.draw_texture(_chunks[chunk], Vector2(chunk % columns, chunk / columns) * size)
 
 
 func _draw_items() -> void:
@@ -113,7 +158,7 @@ func _draw_items() -> void:
 			_multimeshes[type] = multimesh
 		multimesh.instance_count = buffer.size() / 12
 		multimesh.buffer = buffer
-		draw_multimesh(multimesh, art["texture"])
+		_front_layer.draw_multimesh(multimesh, art["texture"])
 
 
 ## The item being crushed is pushed straight down between the rollers, at full size, until
@@ -158,37 +203,38 @@ func _draw_grid(size: Vector2) -> void:
 		draw_line(Vector2(0, y * T), Vector2(size.x, y * T), GRID_LINE)
 
 
-func _draw_part(p: Part, tint: Color) -> void:
+## Draws onto `canvas` (this node, or one of its layers).
+func _draw_part(p: Part, tint: Color, canvas: CanvasItem = self) -> void:
 	var def: Dictionary = PartDefs.DEFS[p.type]
 	var origin := Vector2(p.cell * T)
 	match p.type:
 		&"large_crusher":
 			var r := PartGeometry.LARGE_ROLLER
-			_draw_roller(origin + Vector2(T * 0.5, T * 0.5), r, 1.0, def, tint)
-			_draw_roller(origin + Vector2(T * 1.5, T * 0.5), r, -1.0, def, tint)
+			_draw_roller(origin + Vector2(T * 0.5, T * 0.5), r, 1.0, def, tint, canvas)
+			_draw_roller(origin + Vector2(T * 1.5, T * 0.5), r, -1.0, def, tint, canvas)
 		&"small_crusher":
 			var r := PartGeometry.SMALL_ROLLER
 			for row in 2:
 				var cy := T * (0.25 + row * 0.5)
-				_draw_roller(origin + Vector2(T * 0.25, cy), r, 1.0, def, tint)
-				_draw_roller(origin + Vector2(T * 0.75, cy), r, -1.0, def, tint)
+				_draw_roller(origin + Vector2(T * 0.25, cy), r, 1.0, def, tint, canvas)
+				_draw_roller(origin + Vector2(T * 0.75, cy), r, -1.0, def, tint, canvas)
 		&"bellows":
 			# Squashed from the top while it's pumping.
 			var art := PixelArt.part(p)
 			var texture: Texture2D = art["texture"]
 			var squash := 6.0 if sim and Simulation.is_pumping(sim.tick) else 0.0
-			draw_texture_rect(texture, Rect2(origin + Vector2(0, squash), Vector2(T, T - squash)), false, tint)
+			canvas.draw_texture_rect(texture, Rect2(origin + Vector2(0, squash), Vector2(T, T - squash)), false, tint)
 		_:
 			var art := PixelArt.part(p)
-			draw_texture(art["texture"], origin + art["offset"], tint)
+			canvas.draw_texture(art["texture"], origin + art["offset"], tint)
 
 
 ## A crusher roller, turned as it spins so its letter shows the turning.
-func _draw_roller(center: Vector2, radius: float, direction: float, def: Dictionary, tint: Color) -> void:
+func _draw_roller(center: Vector2, radius: float, direction: float, def: Dictionary, tint: Color, canvas: CanvasItem) -> void:
 	var turn := 0.0
 	if sim:
 		turn = sim.tick / float(Simulation.TICK_RATE) * PartGeometry.ROLLER_SPEED / radius * direction
 	var art := PixelArt.roller(radius, def["color"], def["letter"])
-	draw_set_transform(center, turn)
-	draw_texture(art["texture"], art["offset"], tint)
-	draw_set_transform_matrix(Transform2D.IDENTITY)
+	canvas.draw_set_transform(center, turn)
+	canvas.draw_texture(art["texture"], art["offset"], tint)
+	canvas.draw_set_transform_matrix(Transform2D.IDENTITY)

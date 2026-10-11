@@ -18,9 +18,4 @@ func _init(p_type: StringName, p_cell: Vector2i, p_variant := 0, p_filter: Strin
 
 
 func cells() -> Array[Vector2i]:
-	var result: Array[Vector2i] = []
-	var size := PartDefs.size_of(type)
-	for y in size.y:
-		for x in size.x:
-			result.append(cell + Vector2i(x, y))
-	return result
+	return PartDefs.footprint(type, cell)
