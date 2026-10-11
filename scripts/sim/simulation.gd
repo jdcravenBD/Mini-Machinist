@@ -30,10 +30,10 @@ const MAX_ITEMS := 600
 ## Largest item bounding radius; static segments are registered with this much margin.
 const MAX_RADIUS := 9.0
 const SEG_CELL := 32.0
-## Neighbour-finding grid. Cells are about a gravel piece wide; bigger items are listed in
-## every cell they cover, so each item only ever looks at things actually near it whether
-## it's a chunk or a grain.
-const ITEM_CELL := 6.0
+## Neighbour-finding grid. Items are listed in every cell they cover, so each item only
+## looks at things actually near it, whether it's a chunk or a grain. 12 px balances a
+## chunk covering few cells against gravel sharing few cells.
+const ITEM_CELL := 12.0
 ## How far outside the world the grid reaches (items past this are about to be removed).
 const GRID_MARGIN := 64.0
 ## Solid tile kinds, for pushing out items that a heavy pile squeezed into a solid.
