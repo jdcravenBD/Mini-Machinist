@@ -20,13 +20,17 @@ func _init() -> void:
 		sim.step()
 	var carried := 0
 	var worst := 0.0
+	for it in sim.items:
+		it.update_world()
 	for a in sim.items:
 		if a.carried_tick >= sim.tick - 2:
 			carried += 1
 		for b in sim.items:
-			if a != b:
-				var d := sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
-				worst = maxf(worst, a.radius + b.radius - d)
+			if a != b and (a.x - b.x) ** 2 + (a.y - b.y) ** 2 < (a.radius + b.radius) ** 2:
+				# How deep any corner of a sits inside b.
+				for k in a.count:
+					if sim._deepest_face(a.world[k * 2], a.world[k * 2 + 1], b, 0.0) >= 0:
+						worst = maxf(worst, sim._hit_depth)
 	print("Jammed: %d items, %d being carried, worst overlap %.2f px" % [sim.items.size(), carried, worst])
 
 	# Same items, wall removed, spawners off: the whole queue should run off the end.

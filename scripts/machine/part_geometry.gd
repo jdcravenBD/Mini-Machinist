@@ -4,8 +4,9 @@ class_name PartGeometry
 
 const T := PartDefs.TILE
 const BELT_SPEED := 64.0
-const BELT_FRICTION := 0.25
-const SURFACE_FRICTION := 0.04
+## Friction coefficients: belts grip hard so they drag items up to speed quickly.
+const BELT_FRICTION := 0.9
+const SURFACE_FRICTION := 0.6
 ## Ticks between spawns (60 ticks = 1 second).
 const SPAWN_INTERVAL := 30
 const HOPPER_GAP := 18.0
@@ -44,6 +45,7 @@ static func build(machine: Machine) -> Simulation:
 				sim.add_segment(Segment.new(l, y1, r, y1))
 				sim.add_segment(Segment.new(r, y1, r, y0))
 				sim.add_bin(l, y0 + BIN_CATCH_DEPTH, r, y1)
+	sim.finish_build()
 	return sim
 
 

@@ -12,15 +12,17 @@ var by: float
 var dx: float
 var dy: float
 var len_sq: float
-## Unit direction from a to b.
+## Unit direction from a to b, and a unit normal (which side it faces doesn't matter).
 var tx: float
 var ty: float
+var nx: float
+var ny: float
 var surface_speed: float
-## Fraction of sliding speed (relative to the surface) removed per contact substep.
+## Friction coefficient: how hard it grips what rests on it (about 0.6 slides on a 31° slope).
 var friction: float
 
 
-func _init(p_ax: float, p_ay: float, p_bx: float, p_by: float, p_surface_speed := 0.0, p_friction := 0.02) -> void:
+func _init(p_ax: float, p_ay: float, p_bx: float, p_by: float, p_surface_speed := 0.0, p_friction := 0.6) -> void:
 	ax = p_ax
 	ay = p_ay
 	bx = p_bx
@@ -31,5 +33,7 @@ func _init(p_ax: float, p_ay: float, p_bx: float, p_by: float, p_surface_speed :
 	var length := sqrt(len_sq)
 	tx = dx / length
 	ty = dy / length
+	nx = ty
+	ny = -tx
 	surface_speed = p_surface_speed
 	friction = p_friction

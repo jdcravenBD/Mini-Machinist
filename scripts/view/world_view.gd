@@ -13,8 +13,6 @@ const OUTLINE := Color(0, 0, 0, 0.35)
 const BELT := Color(0.15, 0.15, 0.16)
 const BELT_MARK := Color(0.80, 0.68, 0.30)
 const ITEM_OUTLINE := Color(0, 0, 0, 0.45)
-## Drawn outlines stick out a little past the collision circle so piles look packed.
-const ITEM_DRAW_SCALE := 1.1
 
 var machine: Machine
 var sim: Simulation
@@ -51,25 +49,23 @@ func _draw() -> void:
 		_draw_part(ghost_type, ghost_cell, ghost_flipped, tint)
 
 
-## A lumpy chunk with a lighter fleck, so you can see it tumble and spin.
+## The item's real collision outline, with a lighter fleck so you can see it turn.
 func _draw_item(it: Item) -> void:
 	var key := [it.kind, it.shape]
 	if not _item_polys.has(key):
-		_item_polys[key] = _build_item_polys(it.kind, it.shape)
+		_item_polys[key] = _build_item_polys(it)
 	var polys: Dictionary = _item_polys[key]
 	var def: Dictionary = ItemDefs.DEFS[it.kind]
-	draw_set_transform(Vector2(it.x, it.y), it.angle)
+	draw_set_transform_matrix(Transform2D(Vector2(it.c, it.s), Vector2(-it.s, it.c), Vector2(it.x, it.y)))
 	draw_colored_polygon(polys["body"], def["color"])
 	draw_colored_polygon(polys["fleck"], def["fleck"])
 	draw_polyline(polys["outline"], ITEM_OUTLINE, 1.0, true)
 
 
-func _build_item_polys(kind: StringName, shape: int) -> Dictionary:
-	var r := ItemDefs.radius_of(kind) * ITEM_DRAW_SCALE
-	var mults: Array = ItemDefs.SHAPES[shape]
+func _build_item_polys(it: Item) -> Dictionary:
 	var body := PackedVector2Array()
-	for i in mults.size():
-		body.append(Vector2.from_angle(TAU * i / mults.size()) * r * mults[i])
+	for i in it.count:
+		body.append(Vector2(it.local[i * 2], it.local[i * 2 + 1]))
 	var outline := body.duplicate()
 	outline.append(body[0])
 	# Fleck: a small facet between the first two corners, pulled toward the center.
