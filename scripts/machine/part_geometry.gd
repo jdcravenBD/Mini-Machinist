@@ -8,7 +8,7 @@ const BELT_FRICTION := 0.25
 const SURFACE_FRICTION := 0.04
 ## Ticks between spawns (60 ticks = 1 second).
 const SPAWN_INTERVAL := 30
-const HOPPER_GAP := 16.0
+const HOPPER_GAP := 18.0
 const BIN_INSET := 2.0
 ## How far below the bin's rim an item must fall before it counts as collected.
 const BIN_CATCH_DEPTH := 10.0

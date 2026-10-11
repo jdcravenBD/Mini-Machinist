@@ -10,7 +10,7 @@ signal demo_pressed
 ## Screen space the HUD covers above and below the world, for framing the camera.
 const TOP_MARGIN := 56.0
 const BOTTOM_MARGIN := 48.0
-const HELP := "Left click: place   Right click: remove   R: flip   1-6: pick part\nSpace: play/stop   Middle drag or WASD: pan   Wheel: zoom"
+const HELP := "Left click: place   Right click: remove   R: flip   1-6: pick part\nSpace: play/stop   Middle drag or WASD: pan   Wheel: zoom   Home: re-center"
 
 var _part_buttons := {}  # StringName -> Button
 var _play_button: Button
@@ -21,22 +21,30 @@ var _hint: Label
 
 
 func _ready() -> void:
+	var top := PanelContainer.new()
+	top.anchor_right = 1.0
+	top.offset_bottom = TOP_MARGIN
+	top.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(top)
+	var top_pad := MarginContainer.new()
+	top_pad.add_theme_constant_override("margin_left", 12)
+	top_pad.add_theme_constant_override("margin_right", 12)
+	top.add_child(top_pad)
+	var top_row := HBoxContainer.new()
+	top_pad.add_child(top_row)
+
 	var help := Label.new()
 	help.text = HELP
-	help.position = Vector2(12, 8)
 	help.modulate = Color(1, 1, 1, 0.6)
-	help.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(help)
+	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	help.add_theme_font_size_override("font_size", 14)
+	top_row.add_child(help)
 
 	_stats = Label.new()
-	_stats.anchor_left = 1.0
-	_stats.anchor_right = 1.0
-	_stats.offset_left = -600.0
-	_stats.offset_right = -12.0
-	_stats.offset_top = 8.0
 	_stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_stats)
+	_stats.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_stats.size_flags_vertical = Control.SIZE_FILL
+	top_row.add_child(_stats)
 
 	var panel := PanelContainer.new()
 	panel.anchor_left = 0.0

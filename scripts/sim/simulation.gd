@@ -27,9 +27,10 @@ const SPIN_GRIP := 0.3
 const SPIN_KEEP := 0.995
 const MAX_ITEMS := 600
 ## Largest item radius; static segments are registered with this much margin.
-const MAX_RADIUS := 6.0
+const MAX_RADIUS := 7.0
 const SEG_CELL := 32.0
-const ITEM_CELL := 12.0
+## At least the largest item diameter, so touching items are always in neighbouring cells.
+const ITEM_CELL := 14.0
 ## Solid tile kinds, for pushing out items that a heavy pile squeezed into a solid.
 enum Solid { NONE, BOX, RAMP_DOWN_RIGHT, RAMP_DOWN_LEFT }
 const INV_SQRT2 := 0.7071067811865476

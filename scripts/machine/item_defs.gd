@@ -5,13 +5,13 @@ class_name ItemDefs
 const DEFS := {
 	&"iron_ore": {
 		"name": "Iron Ore",
-		"radius": 5.0,
+		"radius": 6.0,
 		"color": Color(0.62, 0.36, 0.25),
 		"fleck": Color(0.80, 0.52, 0.36),
 	},
 	&"rock": {
 		"name": "Rock",
-		"radius": 6.0,
+		"radius": 7.0,
 		"color": Color(0.50, 0.50, 0.48),
 		"fleck": Color(0.64, 0.64, 0.61),
 	},

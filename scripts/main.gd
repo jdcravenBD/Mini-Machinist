@@ -5,8 +5,12 @@ extends Node2D
 const SAVE_PATH := "user://machine.json"
 const T := PartDefs.TILE
 const PAN_SPEED := 600.0
-const ZOOM_MIN := 0.5
-const ZOOM_MAX := 3.0
+## Closest zoom allowed, and the most the camera zooms in when framing a small machine.
+## The farthest zoom is whatever fits the whole grid on screen.
+const ZOOM_MAX := 4.0
+const FRAME_ZOOM_MAX := 2.0
+## Empty space (in tiles) kept around the machine when framing it.
+const FRAME_MARGIN := 2
 ## Most simulation ticks to run in one frame, so a slow frame can't snowball.
 const MAX_TICKS_PER_FRAME := 4
 
@@ -33,7 +37,9 @@ func _ready() -> void:
 	hud.part_selected.connect(_select)
 	hud.play_pressed.connect(_toggle_play)
 	hud.clear_pressed.connect(machine.clear)
-	hud.demo_pressed.connect(func() -> void: DemoMachine.build(machine))
+	hud.demo_pressed.connect(func() -> void:
+		DemoMachine.build(machine)
+		_frame_camera())
 	_select(selected)
 	_frame_camera()
 
@@ -57,6 +63,7 @@ func _process(delta: float) -> void:
 		hud.set_stats("Building   Parts: %d" % machine.parts.size())
 
 	_pan_with_keys(delta)
+	_clamp_camera()
 	_update_ghost()
 
 
@@ -77,6 +84,8 @@ func _handle_key(keycode: Key) -> void:
 		_toggle_play()
 	elif keycode == KEY_R:
 		flipped = not flipped
+	elif keycode == KEY_HOME:
+		_frame_camera()
 	elif keycode >= KEY_1 and keycode < KEY_1 + PartDefs.ORDER.size():
 		_select(PartDefs.ORDER[keycode - KEY_1])
 
@@ -159,21 +168,42 @@ func _pan_with_keys(delta: float) -> void:
 func _zoom_at(screen_pos: Vector2, factor: float) -> void:
 	var half := get_viewport_rect().size * 0.5
 	var world := camera.position + (screen_pos - half) / camera.zoom
-	var z := clampf(camera.zoom.x * factor, ZOOM_MIN, ZOOM_MAX)
+	var z := clampf(camera.zoom.x * factor, _fit_zoom(_world_rect()), ZOOM_MAX)
 	camera.zoom = Vector2(z, z)
 	camera.position = world - (screen_pos - half) / camera.zoom
 
 
-## Fits the whole grid in the space between the top and bottom HUD bars.
+## Centers the camera on the machine (or the whole grid when it's empty), as close as fits.
 func _frame_camera() -> void:
-	var world_size := Vector2(Machine.WIDTH * T, Machine.HEIGHT * T)
-	var screen := get_viewport_rect().size
-	var space := screen - Vector2(24, Hud.TOP_MARGIN + Hud.BOTTOM_MARGIN + 16)
-	var z := clampf(minf(space.x / world_size.x, space.y / world_size.y), ZOOM_MIN, ZOOM_MAX)
+	var area := _world_rect()
+	if not machine.parts.is_empty():
+		var first := machine.parts[0]
+		area = Rect2(Vector2(first.cell * T), Vector2.ZERO)
+		for p in machine.parts:
+			area = area.merge(Rect2(Vector2(p.cell * T), Vector2(PartDefs.size_of(p.type) * T)))
+		area = area.grow(FRAME_MARGIN * T)
+	var z := clampf(_fit_zoom(area), _fit_zoom(_world_rect()), FRAME_ZOOM_MAX)
 	camera.zoom = Vector2(z, z)
-	# Shift so the grid centers in the free space rather than the whole screen.
+	# The HUD bars differ in height, so shift to center in the space between them.
 	var offset_y := (Hud.TOP_MARGIN - Hud.BOTTOM_MARGIN) * 0.5
-	camera.position = world_size * 0.5 - Vector2(0, offset_y) / z
+	camera.position = area.get_center() - Vector2(0, offset_y) / z
+	_clamp_camera()
+
+
+## Zoom at which `area` just fits between the HUD bars.
+func _fit_zoom(area: Rect2) -> float:
+	var space := get_viewport_rect().size - Vector2(24, Hud.TOP_MARGIN + Hud.BOTTOM_MARGIN + 16)
+	return minf(space.x / area.size.x, space.y / area.size.y)
+
+
+func _world_rect() -> Rect2:
+	return Rect2(Vector2.ZERO, Vector2(Machine.WIDTH * T, Machine.HEIGHT * T))
+
+
+## Keeps the camera's center over the grid so it can't get lost in empty space.
+func _clamp_camera() -> void:
+	var world := _world_rect()
+	camera.position = camera.position.clamp(world.position, world.end)
 
 
 func _save() -> void:
