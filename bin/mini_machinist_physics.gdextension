@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "mini_machinist_physics_init"
+compatibility_minimum = "4.7"
+reloadable = false
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/mini_machinist_physics.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/mini_machinist_physics.windows.template_debug.x86_64.dll"

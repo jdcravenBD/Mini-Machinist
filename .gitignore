@@ -8,3 +8,6 @@ CLAUDE.md
 
 # Local scratch scripts
 tests/_*
+
+# Native build output (the DLL itself lives in bin/ and is committed)
+native/build/

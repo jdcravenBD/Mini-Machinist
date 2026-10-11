@@ -17,25 +17,25 @@ func _init() -> void:
 		for shape in ItemDefs.SHAPES.size():
 			for r in ROTATIONS.size() / 2:
 				var sim := PartGeometry.build(machine)
-				var item := Item.new(kind, 300.0, 280.0, shape, ROTATIONS[r * 2], ROTATIONS[r * 2 + 1])
-				sim.items.append(item)
+				sim.add_item(kind, &"chunk", shape, 300.0, 280.0, ROTATIONS[r * 2], ROTATIONS[r * 2 + 1])
 				for i in 300:
 					sim.step()
-				item.update_world()
+				var item := sim.item(0)
+				var world: PackedFloat64Array = item["world"]
 				# The two lowest corners.
 				var low1 := -INF
 				var low2 := -INF
-				for k in item.count:
-					var y: float = item.world[k * 2 + 1]
+				for k in world.size() / 2:
+					var y: float = world[k * 2 + 1]
 					if y > low1:
 						low2 = low1
 						low1 = y
 					elif y > low2:
 						low2 = y
 				total += 1
-				if not item.sleeping or low1 - low2 > MAX_TILT:
+				if not item["sleeping"] or low1 - low2 > MAX_TILT:
 					failures += 1
-					print("%s shape %d rotation %d: asleep %s, lowest corners %.2f px apart" % [kind, shape, r, item.sleeping, low1 - low2])
+					print("%s shape %d rotation %d: asleep %s, lowest corners %.2f px apart" % [kind, shape, r, item["sleeping"], low1 - low2])
 	print("Settle: %d of %d lying flat" % [total - failures, total])
 	print("Settle: %s" % ("PASS" if failures == 0 else "FAIL"))
 	quit(0 if failures == 0 else 1)

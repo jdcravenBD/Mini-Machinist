@@ -59,7 +59,7 @@ func _process(delta: float) -> void:
 		if ticks == MAX_TICKS_PER_FRAME:
 			_accum = 0.0
 		hud.set_stats("Running %.1fs    Items: %d    Bin: %d iron ore, %d rock    Lost: %d" % [
-			sim.tick / float(Simulation.TICK_RATE), sim.items.size(),
+			sim.tick / float(Simulation.TICK_RATE), sim.item_count(),
 			sim.delivered.get(&"iron_ore", 0), sim.delivered.get(&"rock", 0), sim.lost,
 		])
 	else:

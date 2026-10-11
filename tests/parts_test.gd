@@ -27,11 +27,11 @@ func _sorter_splits() -> bool:
 	# Bins are listed top to bottom, so tell them apart by where they sit.
 	var under: Dictionary = {}
 	var end: Dictionary = {}
-	for b in sim.bins:
-		if b.min_x < 11 * PartDefs.TILE:
-			under = b.by_kind
+	for b in sim.bin_count():
+		if sim.bin_rect(b).position.x < 11 * PartDefs.TILE:
+			under = sim.bin_counts(b)
 		else:
-			end = b.by_kind
+			end = sim.bin_counts(b)
 	print("Sorter: under it %s, at the end %s, lost %d" % [under, end, sim.lost])
 	return under.get(&"iron_ore chunk", 0) == 0 and end.get(&"rock chunk", 0) == 0 \
 		and under.get(&"rock chunk", 0) > 5 and end.get(&"iron_ore chunk", 0) > 10 and sim.lost == 0
@@ -50,7 +50,7 @@ func _panel_basin_holds() -> bool:
 	for i in 1800:
 		sim.step()
 	var lowest := 0.0
-	for it in sim.items:
-		lowest = maxf(lowest, it.y)
-	print("Panel basin: %d items held, lost %d, lowest at y %.1f (floor top at %d)" % [sim.items.size(), sim.lost, lowest, 12 * PartDefs.TILE])
-	return sim.lost == 0 and sim.items.size() > 30 and lowest < 12 * PartDefs.TILE
+	for i in sim.item_count():
+		lowest = maxf(lowest, sim.item(i)["y"])
+	print("Panel basin: %d items held, lost %d, lowest at y %.1f (floor top at %d)" % [sim.item_count(), sim.lost, lowest, 12 * PartDefs.TILE])
+	return sim.lost == 0 and sim.item_count() > 30 and lowest < 12 * PartDefs.TILE

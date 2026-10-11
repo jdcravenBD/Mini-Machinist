@@ -40,4 +40,4 @@ func _run(machine: Machine) -> Dictionary:
 	var sim := PartGeometry.build(machine)
 	for i in TICKS:
 		sim.step()
-	return {"snapshot": sim.snapshot(), "delivered": sim.delivered, "items": sim.items.size(), "lost": sim.lost}
+	return {"snapshot": sim.snapshot(), "delivered": sim.delivered, "items": sim.item_count(), "lost": sim.lost}

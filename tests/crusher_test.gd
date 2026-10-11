@@ -5,7 +5,7 @@ extends SceneTree
 
 func _init() -> void:
 	var ok := _chain_makes_gravel()
-	ok = _bits_fall_through_large() and ok
+	ok = _bits_pass_through_large() and ok
 	ok = _chunk_clogs_small() and ok
 	ok = _belts_feed_directly() and ok
 	print("Crushers: %s" % ("PASS" if ok else "FAIL"))
@@ -31,7 +31,7 @@ func _chain_makes_gravel() -> bool:
 	var sim := PartGeometry.build(machine)
 	for i in 3600:
 		sim.step()
-	var caught: Dictionary = sim.bins[0].by_kind
+	var caught := sim.bin_counts(0)
 	var gravel := 0
 	var other := 0
 	for key in caught:
@@ -39,14 +39,14 @@ func _chain_makes_gravel() -> bool:
 			gravel += caught[key]
 		else:
 			other += caught[key]
-	var chunks: int = sim.spawners[0].count
-	print("Chain: %d chunks mined -> %d gravel in the bin, %d other, lost %d, %d still in the machine" % [chunks, gravel, other, sim.lost, sim.items.size()])
+	var chunks := sim.spawned(0)
+	print("Chain: %d chunks mined -> %d gravel in the bin, %d other, lost %d, %d still in the machine" % [chunks, gravel, other, sim.lost, sim.item_count()])
 	# Everything mined is either gravel in the bin or still on its way.
 	return other == 0 and sim.lost == 0 and gravel > chunks * 9 * 0.6
 
 
 ## Bits dropped into a large crusher are pushed through it unchanged.
-func _bits_fall_through_large() -> bool:
+func _bits_pass_through_large() -> bool:
 	var machine := Machine.new()
 	machine.place(&"large_crusher", Vector2i(10, 5))
 	machine.place(&"bin", Vector2i(10, 7))
@@ -55,11 +55,11 @@ func _bits_fall_through_large() -> bool:
 	for i in 600:
 		if i % 20 == 0 and i < 120:
 			var k := i / 20
-			sim.items.append(Item.new(&"rock" if k % 2 else &"iron_ore", 346.0 + k * 2.0, 120.0, k % 4, 1.0, 0.0, &"bit"))
+			sim.add_item(&"rock" if k % 2 else &"iron_ore", &"bit", k % 4, 346.0 + k * 2.0, 120.0)
 		sim.step()
-	var caught: Dictionary = sim.bins[0].by_kind
+	var caught := sim.bin_counts(0)
 	var bits: int = caught.get(&"rock bit", 0) + caught.get(&"iron_ore bit", 0)
-	print("Bits through large crusher: %s, crushed %d times" % [caught, 0 if sim.crushers[0].held == null else 1])
+	print("Bits through large crusher: %s" % caught)
 	return bits == 6
 
 
@@ -68,12 +68,12 @@ func _chunk_clogs_small() -> bool:
 	var machine := Machine.new()
 	machine.place(&"small_crusher", Vector2i(10, 5))
 	var sim := PartGeometry.build(machine)
-	var chunk := Item.new(&"iron_ore", 336.0, 140.0)
-	sim.items.append(chunk)
+	sim.add_item(&"iron_ore", &"chunk", 0, 336.0, 140.0)
 	for i in 600:
 		sim.step()
-	var stuck := sim.items.has(chunk) and chunk.y < 5 * PartDefs.TILE + 4 and sim.crushers[0].held == null
-	print("Chunk on small crusher: still on top %s (y %.1f)" % [stuck, chunk.y])
+	var stuck: bool = sim.item_count() == 1 and sim.item(0)["size"] == &"chunk" \
+			and sim.item(0)["y"] < 5 * PartDefs.TILE + 4 and not sim.crusher_state(0)["held"]
+	print("Chunk on small crusher: still on top %s" % stuck)
 	return stuck
 
 
@@ -93,22 +93,19 @@ func _belts_feed_directly() -> bool:
 	machine.place(&"panel", Vector2i(11, 16), 3)
 	var sim := PartGeometry.build(machine)
 	for k in 20:
-		sim.items.append(Item.new(&"rock" if k % 3 == 2 else &"iron_ore", 110.0 + k * 9.0, 440.0, k % 4, 1.0, 0.0, &"bit"))
+		sim.add_item(&"rock" if k % 3 == 2 else &"iron_ore", &"bit", k % 4, 110.0 + k * 9.0, 440.0)
 	for i in 2400:
 		sim.step()
 	var bits := 0
 	var gravel := 0
-	var on_belts := 0
-	for b in sim.bins:
-		for key in b.by_kind:
+	for b in sim.bin_count():
+		var caught := sim.bin_counts(b)
+		for key in caught:
 			if String(key).ends_with(" bit"):
-				bits += b.by_kind[key]
+				bits += caught[key]
 			elif String(key).ends_with(" gravel"):
-				gravel += b.by_kind[key]
-	for it in sim.items:
-		if it.size != &"chunk" or it.x > 300:
-			on_belts += 1
-	var mined: int = sim.spawners[0].count
-	print("Direct feed: %d chunks mined -> %d bits; 20 bits -> %d gravel; lost %d; %d pieces left past the belts" % [mined, bits, gravel, sim.lost, on_belts])
+				gravel += caught[key]
+	var mined := sim.spawned(0)
+	print("Direct feed: %d chunks mined -> %d bits; 20 bits -> %d gravel; lost %d" % [mined, bits, gravel, sim.lost])
 	# The last few chunks mined are still riding the belt when the test ends.
 	return sim.lost == 0 and gravel == 60 and bits >= (mined - 10) * 3

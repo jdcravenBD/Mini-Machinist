@@ -25,7 +25,7 @@ func _init() -> void:
 	var total := Time.get_ticks_usec() - start
 
 	# Stop the rain and let the pile settle.
-	sim.spawners.clear()
+	sim.clear_spawners()
 	for i in 600:
 		sim.step()
 	var settled_start := Time.get_ticks_usec()
@@ -33,11 +33,11 @@ func _init() -> void:
 		sim.step()
 	var settled := (Time.get_ticks_usec() - settled_start) / 1000.0 / 60
 
-	print("Items: %d   Sleeping: %d   Lost: %d" % [sim.items.size(), sim.sleeping_count(), sim.lost])
+	print("Items: %d   Sleeping: %d   Lost: %d" % [sim.item_count(), sim.sleeping_count(), sim.lost])
 	print("Average %.2f ms/tick, worst %.2f ms/tick (budget 16.6 ms per frame)" % [total / 1000.0 / TICKS, worst / 1000.0])
-	print("After settling 10s: %d of %d asleep, %.2f ms/tick" % [sim.sleeping_count(), sim.items.size(), settled])
+	print("After settling 10s: %d of %d asleep, %.2f ms/tick" % [sim.sleeping_count(), sim.item_count(), settled])
 	var max_y := 0.0
-	for it in sim.items:
-		max_y = maxf(max_y, it.y)
+	for i in sim.item_count():
+		max_y = maxf(max_y, sim.item(i)["y"])
 	print("Lowest item y: %.1f (pit floor at %d)" % [max_y, 20 * PartDefs.TILE])
 	quit()

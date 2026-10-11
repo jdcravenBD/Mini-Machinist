@@ -23,18 +23,11 @@ var sim: Simulation
 ## Placement preview, or null when there's nothing to preview.
 var ghost: Part = null
 var ghost_valid := true
-## Items are drawn in batches: every item with the same kind, size and outline shares one
-## mesh, drawn in a single call with just a position and rotation per item. Drawing each
-## item separately costs a frame dozens of milliseconds once a few hundred are on screen.
-class ItemBatch:
-	var multimesh := MultiMesh.new()
-	## 8 floats per item: the 2D transform layout MultiMesh expects.
-	var buffer := PackedFloat32Array()
-	var count := 0
-
-
-## [kind, size, shape] -> ItemBatch
-var _item_batches := {}
+## Item meshes by type id (see Simulation.type_id). Every item of a type is drawn in one
+## call from a buffer of transforms the physics fills in directly; drawing each item
+## separately costs a frame dozens of milliseconds once a few hundred are on screen.
+var _meshes := {}
+var _multimeshes := {}
 
 
 func _process(_delta: float) -> void:
@@ -50,10 +43,8 @@ func _draw() -> void:
 
 	# Items being crushed go behind the parts, so they look pushed down between the rollers.
 	if sim:
-		for cr in sim.crushers:
-			if cr.held != null:
-				_draw_crushing(cr)
-		draw_set_transform_matrix(Transform2D.IDENTITY)
+		for i in sim.crusher_count():
+			_draw_crushing(sim.crusher_state(i))
 
 	if machine:
 		for p in machine.parts:
@@ -68,66 +59,57 @@ func _draw() -> void:
 
 ## Every item's real collision outline, with a lighter fleck so you can see it turn.
 func _draw_items() -> void:
-	for batch in _item_batches.values():
-		batch.count = 0
-	for it in sim.items:
-		var batch := _batch_for(it)
-		var at := batch.count * 8
-		if batch.buffer.size() < at + 8:
-			batch.buffer.resize(maxi(64, batch.buffer.size() * 2))
-		batch.buffer[at] = it.c
-		batch.buffer[at + 1] = -it.s
-		batch.buffer[at + 3] = it.x
-		batch.buffer[at + 4] = it.s
-		batch.buffer[at + 5] = it.c
-		batch.buffer[at + 7] = it.y
-		batch.count += 1
-	for batch in _item_batches.values():
-		if batch.count == 0:
+	var buffers := sim.draw_buffers()
+	for type in buffers.size():
+		var buffer: PackedFloat32Array = buffers[type]
+		if buffer.is_empty():
 			continue
-		var capacity: int = batch.buffer.size() / 8
-		if batch.multimesh.instance_count != capacity:
-			batch.multimesh.instance_count = capacity
-		batch.multimesh.buffer = batch.buffer
-		batch.multimesh.visible_instance_count = batch.count
-		draw_multimesh(batch.multimesh, null)
-
-
-func _batch_for(it: Item) -> ItemBatch:
-	var key := [it.kind, it.size, it.shape]
-	var batch: ItemBatch = _item_batches.get(key)
-	if batch == null:
-		batch = ItemBatch.new()
-		batch.multimesh.transform_format = MultiMesh.TRANSFORM_2D
-		batch.multimesh.mesh = _build_item_mesh(it)
-		_item_batches[key] = batch
-	return batch
+		var multimesh: MultiMesh = _multimeshes.get(type)
+		if multimesh == null:
+			multimesh = MultiMesh.new()
+			multimesh.transform_format = MultiMesh.TRANSFORM_2D
+			multimesh.mesh = _mesh_for(type)
+			_multimeshes[type] = multimesh
+		multimesh.instance_count = buffer.size() / 8
+		multimesh.buffer = buffer
+		draw_multimesh(multimesh, null)
 
 
 ## The item being crushed is pushed straight down between the rollers, at full size, until
 ## it breaks into pieces that drop out the bottom as real items.
-func _draw_crushing(cr: Simulation.Crusher) -> void:
-	var t := cr.progress()
-	var it := cr.held
-	var pos := Vector2(lerpf(cr.held_x, cr.exit_x, t), lerpf(cr.held_y, cr.press_y, t))
-	draw_mesh(_batch_for(it).multimesh.mesh, null, Transform2D(Vector2(it.c, it.s), Vector2(-it.s, it.c), pos))
+func _draw_crushing(state: Dictionary) -> void:
+	if not state["held"]:
+		return
+	var t: float = state["progress"]
+	var pos := Vector2(lerpf(state["held_x"], state["exit_x"], t), lerpf(state["held_y"], state["press_y"], t))
+	var c: float = state["c"]
+	var s: float = state["s"]
+	draw_mesh(_mesh_for(state["type"]), null, Transform2D(Vector2(c, s), Vector2(-s, c), pos))
+
+
+func _mesh_for(type: int) -> ArrayMesh:
+	if not _meshes.has(type):
+		var info := Simulation.type_info(type)
+		_meshes[type] = _build_item_mesh(info[0], info[1], info[2])
+	return _meshes[type]
 
 
 ## One item's look as a mesh with baked colors: the body, a dark outline ring just inside
 ## its edge, and a lighter fleck.
-func _build_item_mesh(it: Item) -> ArrayMesh:
-	var def: Dictionary = ItemDefs.DEFS[it.kind]
+func _build_item_mesh(kind: StringName, size: StringName, shape: int) -> ArrayMesh:
+	var def: Dictionary = ItemDefs.DEFS[kind]
 	var body_color: Color = def["color"]
 	var outline_color := body_color.lerp(Color.BLACK, ITEM_OUTLINE_SHADE)
+	var outline := ItemDefs.outline(kind, size, shape)
 	var corners: Array[Vector2] = []
-	for i in it.count:
-		corners.append(Vector2(it.local[i * 2], it.local[i * 2 + 1]))
-	var width := minf(ITEM_OUTLINE_WIDTH, it.radius * 0.15)
+	for i in outline.size() / 2:
+		corners.append(Vector2(outline[i * 2], outline[i * 2 + 1]))
+	var width := minf(ITEM_OUTLINE_WIDTH, Shape.bounding_radius(outline) * 0.15)
 	var verts := PackedVector2Array()
 	var colors := PackedColorArray()
-	for i in it.count:
+	for i in corners.size():
 		var a := corners[i]
-		var b := corners[(i + 1) % it.count]
+		var b := corners[(i + 1) % corners.size()]
 		var a_in := a * (1.0 - width / a.length())
 		var b_in := b * (1.0 - width / b.length())
 		verts.append_array([Vector2.ZERO, a_in, b_in, a, b, b_in, a, b_in, a_in])
