@@ -67,6 +67,8 @@ public:
 		double friction;
 		int passes;
 		bool belt;
+		// Walls that can be switched off together (a crucible's cup while it's tipped), or -1.
+		int group;
 	};
 
 	struct Spawner {
@@ -82,6 +84,14 @@ public:
 		double min_x, min_y, max_x, max_y;
 		int caught = 0;
 		std::map<int, int> by_kind_size;
+	};
+
+	// Swallows items whose centers enter its area while it's open (a crucible's mouth), and
+	// remembers their type ids until the game takes them.
+	struct Intake {
+		double min_x, min_y, max_x, max_y;
+		bool open = true;
+		std::vector<int> taken;
 	};
 
 	struct Crusher {
@@ -116,13 +126,20 @@ public:
 	// Building.
 	void set_bounds(int p_cols, int p_rows);
 	void set_solid(int p_cx, int p_cy, int p_kind);
-	void add_segment(double p_ax, double p_ay, double p_bx, double p_by, double p_speed, double p_friction, int p_passes, bool p_belt);
+	void add_segment(double p_ax, double p_ay, double p_bx, double p_by, double p_speed, double p_friction, int p_passes, bool p_belt, int p_group);
+	void set_group_enabled(int p_group, bool p_enabled);
+	void push_items(double p_min_x, double p_min_y, double p_max_x, double p_max_y, double p_vx, double p_vy);
 	void finish_build();
 	int register_type(int p_kind, int p_size_rank, int p_shape, const PackedFloat64Array &p_outline);
 	void add_spawner(double p_x, double p_y, int p_interval, const PackedInt32Array &p_ore_types, const PackedInt32Array &p_rock_types);
 	int add_bin(double p_min_x, double p_min_y, double p_max_x, double p_max_y);
 	int add_crusher(int p_takes, int p_makes, int p_pieces, int p_duration, double p_min_x, double p_min_y, double p_max_x, double p_max_y, double p_press_y, double p_exit_x, double p_exit_y);
 	int add_item(int p_type, double p_x, double p_y, double p_c, double p_s, double p_vx, double p_vy);
+	int add_intake(double p_min_x, double p_min_y, double p_max_x, double p_max_y);
+	void set_intake_open(int p_intake, bool p_open);
+	PackedInt32Array take_intake(int p_intake);
+	double raycast_down(double p_x, double p_from_y, double p_max_y) const;
+	double type_radius(int p_type) const;
 
 	// Running.
 	void step();
@@ -171,7 +188,8 @@ private:
 	static constexpr int PASS_TICKS = 6;
 	static constexpr double BELT_PRESS = 0.15;
 
-	enum Solid { SOLID_NONE = 0, SOLID_BOX = 1, SOLID_RAMP_DOWN_RIGHT = 2, SOLID_RAMP_DOWN_LEFT = 3 };
+	// SOLID_TOP_HALF fills the top half of its tile (a conveyor).
+	enum Solid { SOLID_NONE = 0, SOLID_BOX = 1, SOLID_RAMP_DOWN_RIGHT = 2, SOLID_RAMP_DOWN_LEFT = 3, SOLID_TOP_HALF = 4 };
 
 	std::vector<ItemType> types;
 	std::map<int, int> type_lookup; // (kind, size_rank, shape) key -> type id
@@ -180,6 +198,10 @@ private:
 	std::vector<Spawner> spawners;
 	std::vector<Bin> bins;
 	std::vector<Crusher> crushers;
+	std::vector<Intake> intakes;
+	std::vector<bool> groups_off;
+
+	bool _segment_off(const Segment &s) const { return s.group >= 0 && s.group < (int)groups_off.size() && groups_off[s.group]; }
 	std::map<int, int> delivered;
 	int64_t tick = 0;
 	int lost = 0;

@@ -1,11 +1,11 @@
 class_name ItemDefs
-## Catalog of item materials and sizes. An item is a material (iron ore, rock, later coal…)
+## Catalog of item materials and sizes. An item is a material (iron ore, rock, scrap iron…)
 ## at a size: a chunk as mined, bits from a large crusher, gravel from a small crusher.
 ## An item's drawn outline IS its collision shape, so what you see is exactly how it tips,
 ## stacks and settles, and whether it fits through a gap.
 
-## Order used when cycling a sorter's filter.
-const ORDER: Array[StringName] = [&"iron_ore", &"rock"]
+## Every material, in the order a sorter's filter cycles through them.
+const ORDER: Array[StringName] = [&"iron_ore", &"rock", &"scrap_iron", &"slag"]
 
 ## "size" is a chunk's scale in pixels (a tile is 32); smaller sizes scale down from it.
 const DEFS := {
@@ -21,14 +21,29 @@ const DEFS := {
 		"color": Color(0.50, 0.50, 0.48),
 		"fleck": Color(0.64, 0.64, 0.61),
 	},
+	# Molten iron that hardened outside a mold (poured onto the floor, or cooled in the
+	# crucible). Melts back down.
+	&"scrap_iron": {
+		"name": "Scrap Iron",
+		"size": 6.5,
+		"color": Color(0.58, 0.60, 0.64),
+		"fleck": Color(0.78, 0.80, 0.84),
+	},
+	# The glassy waste from smelting: everything in ore that isn't iron, and all of rock.
+	&"slag": {
+		"name": "Slag",
+		"size": 7.0,
+		"color": Color(0.24, 0.27, 0.25),
+		"fleck": Color(0.38, 0.44, 0.40),
+	},
 }
 
 ## Sizes from largest to smallest. Three pieces of the next size down hold about the same
 ## amount of material as one piece of the size above (0.55² × 3 ≈ 0.9).
 const SIZES := {
-	&"chunk": {"name": "Chunk", "scale": 1.0},
-	&"bit": {"name": "Bits", "scale": 0.55},
-	&"gravel": {"name": "Gravel", "scale": 0.3},
+	&"chunk": {"name": "Chunk", "scale": 1.0, "amount": 1.0},
+	&"bit": {"name": "Bits", "scale": 0.55, "amount": 1.0 / 3.0},
+	&"gravel": {"name": "Gravel", "scale": 0.3, "amount": 1.0 / 9.0},
 }
 
 ## Lumpy convex outlines of radius ~1, as flat x, y pairs going clockwise on screen.
@@ -45,6 +60,11 @@ const SHAPES := [
 ## 0 for the biggest size, counting up as pieces get smaller.
 static func size_rank(size: StringName) -> int:
 	return SIZES.keys().find(size)
+
+
+## How much material one piece of `size` holds, counting a chunk as 1.
+static func amount_of(size: StringName) -> float:
+	return SIZES[size]["amount"]
 
 
 ## Scale in pixels of `kind` at `size`.

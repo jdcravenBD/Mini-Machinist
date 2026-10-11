@@ -18,7 +18,7 @@ int floor_div(double p_value, double p_cell) {
 	return (int)std::floor(p_value / p_cell);
 }
 
-ItemWorld::Segment make_segment(double ax, double ay, double bx, double by, double speed, double friction, int passes, bool belt) {
+ItemWorld::Segment make_segment(double ax, double ay, double bx, double by, double speed, double friction, int passes, bool belt, int group) {
 	ItemWorld::Segment s;
 	s.ax = ax;
 	s.ay = ay;
@@ -36,6 +36,7 @@ ItemWorld::Segment make_segment(double ax, double ay, double bx, double by, doub
 	s.friction = friction;
 	s.passes = passes;
 	s.belt = belt;
+	s.group = group;
 	return s;
 }
 
@@ -45,7 +46,7 @@ bool is_upright(const ItemWorld::Segment &s) { return s.ax == s.bx; }
 // True if `next` lies on the same line as `run`, behaves the same, and starts where `run`
 // ends (or before).
 bool continues(const ItemWorld::Segment &run, const ItemWorld::Segment &next) {
-	if (run.speed != next.speed || run.friction != next.friction || run.passes != next.passes || run.belt != next.belt) {
+	if (run.speed != next.speed || run.friction != next.friction || run.passes != next.passes || run.belt != next.belt || run.group != next.group) {
 		return false;
 	}
 	if (is_flat(run)) {
@@ -62,7 +63,7 @@ std::vector<ItemWorld::Segment> merge_runs(const std::vector<ItemWorld::Segment>
 	for (ItemWorld::Segment s : input) {
 		// Point each straight segment toward +x or +y (flipping a belt flips its speed too).
 		if ((is_flat(s) && s.ax > s.bx) || (is_upright(s) && s.ay > s.by)) {
-			s = make_segment(s.bx, s.by, s.ax, s.ay, -s.speed, s.friction, s.passes, s.belt);
+			s = make_segment(s.bx, s.by, s.ax, s.ay, -s.speed, s.friction, s.passes, s.belt, s.group);
 		}
 		if (is_flat(s) || is_upright(s)) {
 			straight.push_back(s);
@@ -93,6 +94,9 @@ std::vector<ItemWorld::Segment> merge_runs(const std::vector<ItemWorld::Segment>
 		if (p.belt != q.belt) {
 			return !p.belt;
 		}
+		if (p.group != q.group) {
+			return p.group < q.group;
+		}
 		double p_start = p_flat ? p.ax : p.ay;
 		double q_start = q_flat ? q.ax : q.ay;
 		if (p_start != q_start) {
@@ -107,10 +111,10 @@ std::vector<ItemWorld::Segment> merge_runs(const std::vector<ItemWorld::Segment>
 		if (have_run && continues(run, s)) {
 			if (is_flat(s)) {
 				if (s.bx > run.bx) {
-					run = make_segment(run.ax, run.ay, s.bx, s.by, run.speed, run.friction, run.passes, run.belt);
+					run = make_segment(run.ax, run.ay, s.bx, s.by, run.speed, run.friction, run.passes, run.belt, run.group);
 				}
 			} else if (s.by > run.by) {
-				run = make_segment(run.ax, run.ay, s.bx, s.by, run.speed, run.friction, run.passes, run.belt);
+				run = make_segment(run.ax, run.ay, s.bx, s.by, run.speed, run.friction, run.passes, run.belt, run.group);
 			}
 			continue;
 		}
@@ -151,8 +155,30 @@ void ItemWorld::set_solid(int p_cx, int p_cy, int p_kind) {
 	}
 }
 
-void ItemWorld::add_segment(double p_ax, double p_ay, double p_bx, double p_by, double p_speed, double p_friction, int p_passes, bool p_belt) {
-	segments.push_back(make_segment(p_ax, p_ay, p_bx, p_by, p_speed, p_friction, p_passes, p_belt));
+void ItemWorld::add_segment(double p_ax, double p_ay, double p_bx, double p_by, double p_speed, double p_friction, int p_passes, bool p_belt, int p_group) {
+	segments.push_back(make_segment(p_ax, p_ay, p_bx, p_by, p_speed, p_friction, p_passes, p_belt, p_group));
+	if (p_group >= (int)groups_off.size()) {
+		groups_off.resize(p_group + 1, false);
+	}
+}
+
+// Switches a group of walls off (items pass through them) or back on.
+void ItemWorld::set_group_enabled(int p_group, bool p_enabled) {
+	if (p_group >= 0 && p_group < (int)groups_off.size()) {
+		groups_off[p_group] = !p_enabled;
+	}
+}
+
+// Wakes every item whose center is in the area and sets its velocity (a tipping crucible
+// throwing out what was sitting in its mouth).
+void ItemWorld::push_items(double p_min_x, double p_min_y, double p_max_x, double p_max_y, double p_vx, double p_vy) {
+	for (Body &it : items) {
+		if (it.x > p_min_x && it.x < p_max_x && it.y > p_min_y && it.y < p_max_y) {
+			_wake(it);
+			it.vx = p_vx;
+			it.vy = p_vy;
+		}
+	}
 }
 
 void ItemWorld::finish_build() {
@@ -250,6 +276,78 @@ int ItemWorld::add_crusher(int p_takes, int p_makes, int p_pieces, int p_duratio
 	cr.exit_y = p_exit_y;
 	crushers.push_back(cr);
 	return (int)crushers.size() - 1;
+}
+
+int ItemWorld::add_intake(double p_min_x, double p_min_y, double p_max_x, double p_max_y) {
+	Intake in;
+	in.min_x = p_min_x;
+	in.min_y = p_min_y;
+	in.max_x = p_max_x;
+	in.max_y = p_max_y;
+	intakes.push_back(in);
+	return (int)intakes.size() - 1;
+}
+
+void ItemWorld::set_intake_open(int p_intake, bool p_open) {
+	if (p_intake >= 0 && p_intake < (int)intakes.size()) {
+		intakes[p_intake].open = p_open;
+	}
+}
+
+// The type ids of everything the intake swallowed since the last call.
+PackedInt32Array ItemWorld::take_intake(int p_intake) {
+	PackedInt32Array result;
+	if (p_intake >= 0 && p_intake < (int)intakes.size()) {
+		for (int type : intakes[p_intake].taken) {
+			result.push_back(type);
+		}
+		intakes[p_intake].taken.clear();
+	}
+	return result;
+}
+
+// The first y at or below `p_from_y` where a straight drop at `p_x` would hit a wall or an
+// item, or `p_max_y` if nothing is in the way (where a poured stream lands).
+double ItemWorld::raycast_down(double p_x, double p_from_y, double p_max_y) const {
+	double best = p_max_y;
+	for (const Segment &s : segments) {
+		if (s.dx == 0.0 || _segment_off(s)) {
+			continue;
+		}
+		double u = (p_x - s.ax) / s.dx;
+		if (u < 0.0 || u > 1.0) {
+			continue;
+		}
+		double y = s.ay + u * s.dy;
+		if (y >= p_from_y && y < best) {
+			best = y;
+		}
+	}
+	for (const Body &it : items) {
+		const ItemType &t = types[it.type];
+		if (std::abs(it.x - p_x) > t.radius || it.y + t.radius < p_from_y || it.y - t.radius > best) {
+			continue;
+		}
+		for (int i = 0; i < t.count; i++) {
+			int j = (i + 1) % t.count;
+			double ax = it.x + it.c * t.local[i * 2] - it.s * t.local[i * 2 + 1];
+			double ay = it.y + it.s * t.local[i * 2] + it.c * t.local[i * 2 + 1];
+			double bx = it.x + it.c * t.local[j * 2] - it.s * t.local[j * 2 + 1];
+			double by = it.y + it.s * t.local[j * 2] + it.c * t.local[j * 2 + 1];
+			if ((ax - p_x) * (bx - p_x) > 0.0 || ax == bx) {
+				continue;
+			}
+			double y = ay + (p_x - ax) / (bx - ax) * (by - ay);
+			if (y >= p_from_y && y < best) {
+				best = y;
+			}
+		}
+	}
+	return best;
+}
+
+double ItemWorld::type_radius(int p_type) const {
+	return p_type >= 0 && p_type < (int)types.size() ? types[p_type].radius : 0.0;
 }
 
 int ItemWorld::add_item(int p_type, double p_x, double p_y, double p_c, double p_s, double p_vx, double p_vy) {
@@ -625,7 +723,7 @@ void ItemWorld::_detect_wall(int ia, int si) {
 	const Segment &sg = segments[si];
 	Body &a = items[ia];
 	const ItemType &ta = types[a.type];
-	if (sg.passes == ta.kind) {
+	if (sg.passes == ta.kind || _segment_off(sg)) {
 		return;
 	}
 	double along = (a.x - sg.ax) * sg.tx + (a.y - sg.ay) * sg.ty;
@@ -902,6 +1000,20 @@ void ItemWorld::_push_out_of_solid(Body &it) {
 	double lx = it.x - cx * SEG_CELL;
 	double ly = it.y - cy * SEG_CELL;
 
+	if (kind == SOLID_TOP_HALF) {
+		// Only the top half is solid; out through the top if that's open, else the bottom.
+		double half = SEG_CELL * 0.5;
+		if (ly >= half) {
+			return;
+		}
+		if (_is_open(cx, cy - 1, 0, 1) && ly <= half - ly) {
+			_push_out_along(it, ly, 0.0, -1.0);
+		} else {
+			_push_out_along(it, half - ly, 0.0, 1.0);
+		}
+		return;
+	}
+
 	if (kind == SOLID_RAMP_DOWN_RIGHT || kind == SOLID_RAMP_DOWN_LEFT) {
 		bool down_right = kind == SOLID_RAMP_DOWN_RIGHT;
 		double depth = down_right ? (ly - lx) : (lx + ly - SEG_CELL);
@@ -971,6 +1083,9 @@ bool ItemWorld::_is_open(int cx, int cy, int side_x, int side_y) const {
 			return !(side_x == 0 && side_y == 1) && !(side_x == -1 && side_y == 0);
 		case SOLID_RAMP_DOWN_LEFT:
 			return !(side_x == 0 && side_y == 1) && !(side_x == 1 && side_y == 0);
+		case SOLID_TOP_HALF:
+			// Only its bottom is open: the lower half of the tile is empty.
+			return side_x == 0 && side_y == 1;
 	}
 	return false;
 }
@@ -1040,7 +1155,7 @@ bool ItemWorld::_is_supported(int index) {
 	if (walls) {
 		for (int si : *walls) {
 			const Segment &sg = segments[si];
-			if (sg.passes == t.kind) {
+			if (sg.passes == t.kind || _segment_off(sg)) {
 				continue;
 			}
 			double side = (it.x - sg.ax) * sg.nx + (it.y - sg.ay) * sg.ny;
@@ -1132,6 +1247,15 @@ void ItemWorld::_collect() {
 				delivered[t.kind] += 1;
 				caught = true;
 				break;
+			}
+		}
+		if (!caught) {
+			for (Intake &in : intakes) {
+				if (in.open && it.x > in.min_x && it.x < in.max_x && it.y > in.min_y && it.y < in.max_y) {
+					in.taken.push_back(it.type);
+					caught = true;
+					break;
+				}
 			}
 		}
 		if (caught) {
@@ -1341,13 +1465,20 @@ void ItemWorld::copy_items_from(const Ref<ItemWorld> &p_other) {
 void ItemWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bounds", "cols", "rows"), &ItemWorld::set_bounds);
 	ClassDB::bind_method(D_METHOD("set_solid", "cx", "cy", "kind"), &ItemWorld::set_solid);
-	ClassDB::bind_method(D_METHOD("add_segment", "ax", "ay", "bx", "by", "speed", "friction", "passes", "belt"), &ItemWorld::add_segment);
+	ClassDB::bind_method(D_METHOD("add_segment", "ax", "ay", "bx", "by", "speed", "friction", "passes", "belt", "group"), &ItemWorld::add_segment);
+	ClassDB::bind_method(D_METHOD("set_group_enabled", "group", "enabled"), &ItemWorld::set_group_enabled);
+	ClassDB::bind_method(D_METHOD("push_items", "min_x", "min_y", "max_x", "max_y", "vx", "vy"), &ItemWorld::push_items);
 	ClassDB::bind_method(D_METHOD("finish_build"), &ItemWorld::finish_build);
 	ClassDB::bind_method(D_METHOD("register_type", "kind", "size_rank", "shape", "outline"), &ItemWorld::register_type);
 	ClassDB::bind_method(D_METHOD("add_spawner", "x", "y", "interval", "ore_types", "rock_types"), &ItemWorld::add_spawner);
 	ClassDB::bind_method(D_METHOD("add_bin", "min_x", "min_y", "max_x", "max_y"), &ItemWorld::add_bin);
 	ClassDB::bind_method(D_METHOD("add_crusher", "takes", "makes", "pieces", "duration", "min_x", "min_y", "max_x", "max_y", "press_y", "exit_x", "exit_y"), &ItemWorld::add_crusher);
 	ClassDB::bind_method(D_METHOD("add_item", "type", "x", "y", "c", "s", "vx", "vy"), &ItemWorld::add_item);
+	ClassDB::bind_method(D_METHOD("add_intake", "min_x", "min_y", "max_x", "max_y"), &ItemWorld::add_intake);
+	ClassDB::bind_method(D_METHOD("set_intake_open", "intake", "open"), &ItemWorld::set_intake_open);
+	ClassDB::bind_method(D_METHOD("take_intake", "intake"), &ItemWorld::take_intake);
+	ClassDB::bind_method(D_METHOD("raycast_down", "x", "from_y", "max_y"), &ItemWorld::raycast_down);
+	ClassDB::bind_method(D_METHOD("type_radius", "type"), &ItemWorld::type_radius);
 	ClassDB::bind_method(D_METHOD("step"), &ItemWorld::step);
 	ClassDB::bind_method(D_METHOD("get_tick"), &ItemWorld::get_tick);
 	ClassDB::bind_method(D_METHOD("set_tick", "tick"), &ItemWorld::set_tick);

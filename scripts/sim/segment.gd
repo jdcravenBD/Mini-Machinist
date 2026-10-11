@@ -25,6 +25,8 @@ var passes: StringName
 ## A conveyor belt surface (eases off on items that are held back). Other moving surfaces,
 ## like crusher rollers, keep their full grip.
 var belt: bool
+## Walls that can be switched off together (a crucible's cup while it's tipped), or -1.
+var group := -1
 
 
 func _init(p_ax: float, p_ay: float, p_bx: float, p_by: float, p_surface_speed := 0.0, p_friction := 0.6, p_passes: StringName = &"", p_belt := false) -> void:

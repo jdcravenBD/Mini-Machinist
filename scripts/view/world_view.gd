@@ -2,21 +2,25 @@ class_name WorldView
 extends Node2D
 ## Draws the grid, parts, items and the placement preview.
 ##
-## Everything here is placeholder shapes at final sizes. When real art arrives, each
-## part's _draw_* function is the single place to swap in a sprite.
+## Parts use a simple development look until real art arrives: each is its color with a
+## darker stroke just inside its edge and its letter in the middle (see PartDefs). Shapes are
+## the parts' real sizes, so art can be swapped in per part in _draw_part.
 
 const T := PartDefs.TILE
 const BACKGROUND := Color(0.16, 0.155, 0.15)
 const GRID_LINE := Color(1, 1, 1, 0.05)
 const BORDER := Color(1, 1, 1, 0.18)
-const OUTLINE := Color(0, 0, 0, 0.35)
-const BELT := Color(0.15, 0.15, 0.16)
-const BELT_MARK := Color(0.80, 0.68, 0.30)
+## How much darker a part's inner stroke is than its color, and how thick it is.
+const STROKE_SHADE := 0.35
+const STROKE_WIDTH := 2.0
+const LETTER_SIZE := 14
+## Inside a crucible: unmelted pieces, molten iron and slag.
+const CRUCIBLE_SOLIDS := Color(0.50, 0.33, 0.24)
+const MOLTEN_IRON := Color(1.0, 0.62, 0.18)
+const MOLTEN_SLAG := Color(0.42, 0.26, 0.16)
 ## How dark an item's outline is, and how thick (it's thinner on tiny items).
 const ITEM_OUTLINE_SHADE := 0.45
 const ITEM_OUTLINE_WIDTH := 0.8
-const ROLLER := Color(0.24, 0.24, 0.25)
-const ROLLER_TOOTH := Color(0.55, 0.55, 0.57)
 
 var machine: Machine
 var sim: Simulation
@@ -137,133 +141,146 @@ func _draw_grid(size: Vector2) -> void:
 func _draw_part(p: Part, tint: Color) -> void:
 	var def: Dictionary = PartDefs.DEFS[p.type]
 	var rect := Rect2(Vector2(p.cell * T), Vector2(def["size"] * T))
-	var color: Color = def["color"] * tint
-	var flipped := p.variant == 1
+	var color: Color = def["color"]
+	var letter: String = def["letter"]
 	match p.type:
-		&"block":
-			_draw_box(rect, color, tint)
-		&"spawner":
-			_draw_box(rect, color, tint)
-			# Output slot at the bottom.
-			var slot := Rect2(rect.position + Vector2(10, T - 6), Vector2(12, 6))
-			draw_rect(slot, BELT * tint)
-			draw_colored_polygon(PackedVector2Array([
-				rect.position + Vector2(10, 9), rect.position + Vector2(22, 9), rect.position + Vector2(16, 18),
-			]), BELT_MARK * tint)
 		&"conveyor":
-			_draw_conveyor(rect, color, flipped, tint)
+			var belt := Rect2(rect.position, Vector2(T, PartGeometry.CONVEYOR_HEIGHT))
+			_draw_styled(belt, color, "<" if p.variant == 1 else ">", tint, 12)
 		&"sorter":
-			_draw_sorter(rect, color, flipped, p.filter, tint)
-		&"large_crusher":
-			var r := PartGeometry.LARGE_ROLLER
-			_draw_roller(rect.position + Vector2(T * 0.5, T * 0.5), r, 1.0, tint)
-			_draw_roller(rect.position + Vector2(T * 1.5, T * 0.5), r, -1.0, tint)
-		&"small_crusher":
-			var r := PartGeometry.SMALL_ROLLER
-			for row in 2:
-				var cy := T * (0.25 + row * 0.5)
-				_draw_roller(rect.position + Vector2(T * 0.25, cy), r, 1.0, tint)
-				_draw_roller(rect.position + Vector2(T * 0.75, cy), r, -1.0, tint)
-		&"panel":
-			var slab := PartGeometry.panel_rect(p)
-			draw_rect(slab, color)
-			draw_rect(slab, OUTLINE * tint, false, 1.0)
+			# The belt on top (with a dot showing what it drops), over an open chute between posts.
+			var belt := Rect2(rect.position, Vector2(T, PartGeometry.CONVEYOR_HEIGHT))
+			_draw_styled(belt, color, letter, tint, 12)
+			var post := Vector2(4, T - PartGeometry.CONVEYOR_HEIGHT)
+			_draw_styled(Rect2(rect.position + Vector2(0, PartGeometry.CONVEYOR_HEIGHT), post), color, "", tint)
+			_draw_styled(Rect2(rect.position + Vector2(T - 4, PartGeometry.CONVEYOR_HEIGHT), post), color, "", tint)
+			if ItemDefs.DEFS.has(p.filter):
+				var dot := Rect2(rect.position + Vector2(T - 9, 4), Vector2(6, 6))
+				draw_rect(dot, ItemDefs.DEFS[p.filter]["color"] * tint)
 		&"ramp":
 			var pts := PackedVector2Array([rect.position, rect.position + Vector2(0, T), rect.end])
-			if flipped:
+			if p.variant == 1:
 				pts = PackedVector2Array([rect.position + Vector2(T, 0), rect.end, rect.position + Vector2(0, T)])
-			draw_colored_polygon(pts, color)
-			pts.append(pts[0])
-			draw_polyline(pts, OUTLINE * tint, 2.0)
+			_draw_styled_polygon(pts, color, letter, tint, 10)
 		&"hopper":
 			var mid := rect.position.x + rect.size.x * 0.5
 			var gap := PartGeometry.HOPPER_GAP * 0.5
 			var wall := 5.0
-			draw_colored_polygon(PackedVector2Array([
+			_draw_styled_polygon(PackedVector2Array([
 				rect.position, rect.position + Vector2(wall, 0),
 				Vector2(mid - gap, rect.end.y), Vector2(mid - gap - wall, rect.end.y),
-			]), color)
-			draw_colored_polygon(PackedVector2Array([
-				Vector2(rect.end.x, rect.position.y), Vector2(rect.end.x - wall, rect.position.y),
-				Vector2(mid + gap, rect.end.y), Vector2(mid + gap + wall, rect.end.y),
-			]), color)
+			]), color, "", tint)
+			_draw_styled_polygon(PackedVector2Array([
+				Vector2(rect.end.x - wall, rect.position.y), Vector2(rect.end.x, rect.position.y),
+				Vector2(mid + gap + wall, rect.end.y), Vector2(mid + gap, rect.end.y),
+			]), color, "", tint)
+			_draw_letter(Vector2(mid, rect.position.y + 10), letter, color * tint, 12)
+		&"large_crusher":
+			var r := PartGeometry.LARGE_ROLLER
+			_draw_roller(rect.position + Vector2(T * 0.5, T * 0.5), r, 1.0, color, letter, tint)
+			_draw_roller(rect.position + Vector2(T * 1.5, T * 0.5), r, -1.0, color, letter, tint)
+		&"small_crusher":
+			var r := PartGeometry.SMALL_ROLLER
+			for row in 2:
+				var cy := T * (0.25 + row * 0.5)
+				_draw_roller(rect.position + Vector2(T * 0.25, cy), r, 1.0, color, letter, tint)
+				_draw_roller(rect.position + Vector2(T * 0.75, cy), r, -1.0, color, letter, tint)
+		&"panel":
+			_draw_styled(PartGeometry.panel_rect(p), color, "", tint, LETTER_SIZE, 1.5)
 		&"bin":
 			var inset := PartGeometry.BIN_INSET
+			var wall := 4.0
 			var l := rect.position.x + inset
 			var r := rect.end.x - inset
-			draw_rect(Rect2(Vector2(l, rect.position.y + 6), Vector2(r - l, rect.size.y - 6)), color * Color(1, 1, 1, 0.35))
-			draw_polyline(PackedVector2Array([
-				Vector2(l, rect.position.y), Vector2(l, rect.end.y), Vector2(r, rect.end.y), Vector2(r, rect.position.y),
-			]), color, 4.0)
+			_draw_styled(Rect2(Vector2(l - wall * 0.5, rect.position.y), Vector2(wall, T)), color, "", tint, 0, 1.0)
+			_draw_styled(Rect2(Vector2(r - wall * 0.5, rect.position.y), Vector2(wall, T)), color, "", tint, 0, 1.0)
+			_draw_styled(Rect2(Vector2(l - wall * 0.5, rect.end.y - wall), Vector2(r - l + wall, wall)), color, "", tint, 0, 1.0)
+			_draw_letter(rect.get_center(), letter, color * tint, LETTER_SIZE)
+		&"crucible":
+			_draw_crucible(p, rect, color, letter, tint)
+		&"bellows":
+			# Squashed while it's pumping.
+			var body := rect
+			if sim and Smelter.is_pumping(sim.tick):
+				body = rect.grow_individual(0, -6, 0, 0)
+			_draw_styled(body, color, letter, tint)
+		_:
+			_draw_styled(rect, color, letter, tint)
 
 
-## A toothed roller, turning clockwise for `direction` 1 and counterclockwise for -1.
-func _draw_roller(center: Vector2, radius: float, direction: float, tint: Color) -> void:
+## The development look: a solid color, a darker stroke just inside the edge, and a letter.
+func _draw_styled(rect: Rect2, color: Color, letter: String, tint: Color, letter_size := LETTER_SIZE, stroke := STROKE_WIDTH) -> void:
+	draw_rect(rect, color * tint)
+	stroke = minf(stroke, minf(rect.size.x, rect.size.y) * 0.25)
+	draw_rect(rect.grow(-stroke * 0.5), color.darkened(STROKE_SHADE) * tint, false, stroke)
+	if letter != "":
+		_draw_letter(rect.get_center(), letter, _letter_color(color) * tint, letter_size)
+
+
+## The same look for a shape that isn't a rectangle (its stroke follows the edge inward).
+func _draw_styled_polygon(points: PackedVector2Array, color: Color, letter: String, tint: Color, letter_size := LETTER_SIZE) -> void:
+	draw_colored_polygon(points, color * tint)
+	var center := Vector2.ZERO
+	for point in points:
+		center += point
+	center /= points.size()
+	var inner := PackedVector2Array()
+	for point in points:
+		var toward := center - point
+		inner.append(point + toward.normalized() * minf(STROKE_WIDTH, toward.length() * 0.5))
+	inner.append(inner[0])
+	draw_polyline(inner, color.darkened(STROKE_SHADE) * tint, STROKE_WIDTH * 0.75)
+	if letter != "":
+		_draw_letter(center, letter, _letter_color(color) * tint, letter_size)
+
+
+func _draw_letter(center: Vector2, letter: String, color: Color, font_size: int) -> void:
+	var font := ThemeDB.fallback_font
+	var size := font.get_string_size(letter, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	draw_string(font, center + Vector2(-size.x * 0.5, font_size * 0.35), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+
+
+## Dark letters on light parts, light letters on dark ones.
+func _letter_color(color: Color) -> Color:
+	return color.darkened(0.6) if color.get_luminance() > 0.4 else color.lightened(0.6)
+
+
+## A roller in the development look. Its letter turns with it, so you can see it spin.
+func _draw_roller(center: Vector2, radius: float, direction: float, color: Color, letter: String, tint: Color) -> void:
 	var turn := 0.0
 	if sim:
 		turn = sim.tick / float(Simulation.TICK_RATE) * PartGeometry.ROLLER_SPEED / radius * direction
-	var teeth := 12 if radius > 10.0 else 8
-	var tooth := radius * 0.22
-	var body := PackedVector2Array()
-	for i in teeth * 2:
-		var a := turn + TAU * i / (teeth * 2)
-		body.append(center + Vector2.from_angle(a) * (radius if i % 2 == 0 else radius - tooth))
-	draw_colored_polygon(body, ROLLER_TOOTH * tint)
-	draw_circle(center, radius - tooth, ROLLER * tint)
-	draw_circle(center, radius * 0.25, ROLLER_TOOTH * tint)
+	draw_circle(center, radius, color * tint)
+	draw_arc(center, radius - STROKE_WIDTH * 0.5, 0.0, TAU, 32, color.darkened(STROKE_SHADE) * tint, STROKE_WIDTH)
+	draw_set_transform(center, turn)
+	_draw_letter(Vector2.ZERO, letter, _letter_color(color) * tint, int(radius * 0.9))
+	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 
-func _draw_box(rect: Rect2, color: Color, tint: Color) -> void:
-	draw_rect(rect, color)
-	draw_rect(rect.grow(-1.0), OUTLINE * tint, false, 2.0)
-
-
-func _draw_conveyor(rect: Rect2, color: Color, flipped: bool, tint: Color) -> void:
-	draw_rect(rect, color)
-	_draw_belt(rect, flipped, tint)
-	var dir := -1.0 if flipped else 1.0
-	# Rollers and a direction arrow on the housing.
-	draw_circle(rect.position + Vector2(8, 22), 4.0, BELT * tint)
-	draw_circle(rect.position + Vector2(24, 22), 4.0, BELT * tint)
-	var c := rect.position + Vector2(16, 22)
-	draw_colored_polygon(PackedVector2Array([
-		c + Vector2(-3 * dir, -4), c + Vector2(3 * dir, 0), c + Vector2(-3 * dir, 4),
-	]), BELT_MARK * tint)
-	draw_rect(rect.grow(-1.0), OUTLINE * tint, false, 2.0)
-
-
-## Belt band along the top, with marks that scroll in the travel direction while running.
-func _draw_belt(rect: Rect2, flipped: bool, tint: Color) -> void:
-	draw_rect(Rect2(rect.position, Vector2(rect.size.x, 8)), BELT * tint)
-	var dir := -1.0 if flipped else 1.0
-	var offset := 0.0
-	if sim:
-		offset = fposmod(sim.tick * PartGeometry.BELT_SPEED / Simulation.TICK_RATE * dir, 16.0)
-	for i in range(-1, 2):
-		var mx := rect.position.x + offset + i * 16.0 + 4.0
-		if mx >= rect.position.x and mx + 4.0 <= rect.end.x:
-			draw_rect(Rect2(Vector2(mx, rect.position.y + 3), Vector2(4, 2)), BELT_MARK * tint)
-
-
-## A belt with a grate over an open chute, showing the item it drops.
-func _draw_sorter(rect: Rect2, color: Color, flipped: bool, filter: StringName, tint: Color) -> void:
-	var post := 5.0
-	draw_rect(Rect2(rect.position + Vector2(0, 8), Vector2(rect.size.x, rect.size.y - 8)), BELT * Color(1, 1, 1, 0.5) * tint)
-	draw_rect(Rect2(rect.position, Vector2(post, rect.size.y)), color)
-	draw_rect(Rect2(Vector2(rect.end.x - post, rect.position.y), Vector2(post, rect.size.y)), color)
-	_draw_belt(rect, flipped, tint)
-	# Grate slots across the belt.
-	for i in 4:
-		draw_rect(Rect2(rect.position + Vector2(5 + i * 6, 1), Vector2(3, 6)), Color(0, 0, 0, 0.55) * tint)
-	# What it drops, with an arrow pointing down through the chute.
-	if ItemDefs.DEFS.has(filter):
-		var icon := PackedVector2Array()
-		var outline := ItemDefs.outline(filter, &"chunk", 0)
-		var center := rect.position + Vector2(16, 17)
-		for i in outline.size() / 2:
-			icon.append(center + Vector2(outline[i * 2], outline[i * 2 + 1]) * 0.8)
-		draw_colored_polygon(icon, ItemDefs.DEFS[filter]["color"] * tint)
-		var arrow := rect.position + Vector2(16, 26)
-		draw_colored_polygon(PackedVector2Array([
-			arrow + Vector2(-4, -2), arrow + Vector2(4, -2), arrow + Vector2(0, 3),
-		]), BELT_MARK * tint)
+## A crucible: its body, what's inside (unmelted pieces, molten iron, slag floating on top),
+## its temperature, and, while pouring, tipped over with a stream falling from its lip.
+func _draw_crucible(p: Part, rect: Rect2, color: Color, letter: String, tint: Color) -> void:
+	var smelter: Smelter = sim.smelters_by_cell.get(p.cell) if sim else null
+	# Tipping pivots on the bottom corner on the pouring side.
+	var tilt := smelter.tilt * smelter.pour_dir if smelter else 0.0
+	var pivot := Vector2(rect.end.x if tilt > 0.0 else rect.position.x, rect.end.y)
+	draw_set_transform(pivot, tilt * Smelter.TILT_ANGLE)
+	var local := Rect2(rect.position - pivot, rect.size)
+	_draw_styled(local, color, "", tint)
+	if smelter:
+		# Fill levels, bottom up, as a share of what the crucible holds.
+		var inside := local.grow(-4.0)
+		var y := inside.end.y
+		for layer in [[smelter.solid_amount(), CRUCIBLE_SOLIDS], [smelter.iron, MOLTEN_IRON], [smelter.slag, MOLTEN_SLAG]]:
+			var height := minf(y - inside.position.y, inside.size.y * layer[0] / Smelter.CAPACITY)
+			if height > 0.0:
+				draw_rect(Rect2(Vector2(inside.position.x, y - height), Vector2(inside.size.x, height)), layer[1] * tint)
+				y -= height
+	_draw_letter(local.get_center(), letter, _letter_color(color) * tint, LETTER_SIZE)
+	draw_set_transform_matrix(Transform2D.IDENTITY)
+	if smelter:
+		var hot := clampf((smelter.temperature - 300.0) / (Smelter.MELT_POINT - 300.0), 0.0, 1.0)
+		var label := Color(0.8, 0.8, 0.8).lerp(MOLTEN_IRON, hot)
+		_draw_letter(Vector2(rect.get_center().x, rect.position.y - 5), "%d°" % roundi(smelter.temperature), label, 9)
+		if smelter.stream_on:
+			draw_line(Vector2(smelter.stream_x, smelter.stream_top), Vector2(smelter.stream_x, smelter.stream_y), MOLTEN_IRON, 3.0)

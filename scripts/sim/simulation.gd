@@ -12,7 +12,8 @@ extends RefCounted
 const TICK_RATE := 60
 
 ## Solid tile kinds, for pushing out items that a heavy pile squeezed into a solid.
-enum Solid { NONE, BOX, RAMP_DOWN_RIGHT, RAMP_DOWN_LEFT }
+## TOP_HALF fills only the top half of its tile (a conveyor).
+enum Solid { NONE, BOX, RAMP_DOWN_RIGHT, RAMP_DOWN_LEFT, TOP_HALF }
 
 var world := ItemWorld.new()
 
@@ -32,7 +33,13 @@ var delivered: Dictionary:
 			result[ItemDefs.ORDER[kind_index]] = raw[kind_index]
 		return result
 
+## Crucibles and the smelting parts touching them, run after the physics each tick.
+var smelters: Array[Smelter] = []
+## Crucible cell -> its Smelter, for drawing.
+var smelters_by_cell := {}
+
 var _bin_rects: Array[Rect2] = []
+var _wall_groups := 0
 
 
 func _init() -> void:
@@ -70,7 +77,7 @@ func set_solid(cell: Vector2i, kind: Solid) -> void:
 
 ## Collected until finish_build(), which joins straight runs and indexes them.
 func add_segment(seg: Segment) -> void:
-	world.add_segment(seg.ax, seg.ay, seg.bx, seg.by, seg.surface_speed, seg.friction, ItemDefs.ORDER.find(seg.passes), seg.belt)
+	world.add_segment(seg.ax, seg.ay, seg.bx, seg.by, seg.surface_speed, seg.friction, ItemDefs.ORDER.find(seg.passes), seg.belt, seg.group)
 
 
 ## Emits a repeating ore/rock chunk pattern from a point, pausing while the output is blocked.
@@ -96,6 +103,22 @@ func add_crusher(takes: StringName, makes: StringName, pieces: int, duration: in
 			intake.position.x, intake.position.y, intake.end.x, intake.end.y, press_y, exit_x, exit_y)
 
 
+## A new id for a group of walls that can be switched off together.
+func new_wall_group() -> int:
+	_wall_groups += 1
+	return _wall_groups - 1
+
+
+## An area that swallows items while open; returns its id for Smelter.
+func add_intake(area: Rect2) -> int:
+	return world.add_intake(area.position.x, area.position.y, area.end.x, area.end.y)
+
+
+func add_smelter(cell: Vector2i, smelter: Smelter) -> void:
+	smelters.append(smelter)
+	smelters_by_cell[cell] = smelter
+
+
 func finish_build() -> void:
 	world.finish_build()
 
@@ -104,6 +127,8 @@ func finish_build() -> void:
 
 func step() -> void:
 	world.step()
+	for smelter in smelters:
+		smelter.step(self)
 
 
 ## Drops an item into the world (tests and future player actions). Returns its index.
