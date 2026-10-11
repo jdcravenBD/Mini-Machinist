@@ -10,7 +10,9 @@ extends RefCounted
 
 const DENSITY := 1.0
 
+## Material (ItemDefs.DEFS key) and size (ItemDefs.SIZES key).
 var kind: StringName
+var size: StringName
 ## Which outline from ItemDefs.SHAPES this item uses.
 var shape: int
 ## Outline around the center of mass, flat x, y pairs, and its edge normals.
@@ -70,10 +72,11 @@ var push_up := 0.0
 
 
 ## `p_c`/`p_s` give the starting rotation; they must form a unit vector.
-func _init(p_kind: StringName, p_x: float, p_y: float, p_shape := 0, p_c := 1.0, p_s := 0.0) -> void:
+func _init(p_kind: StringName, p_x: float, p_y: float, p_shape := 0, p_c := 1.0, p_s := 0.0, p_size: StringName = &"chunk") -> void:
 	kind = p_kind
+	size = p_size
 	shape = p_shape
-	local = ItemDefs.outline(p_kind, p_shape)
+	local = ItemDefs.outline(p_kind, p_size, p_shape)
 	local_normals = Shape.normals(local)
 	count = local.size() / 2
 	radius = Shape.bounding_radius(local)

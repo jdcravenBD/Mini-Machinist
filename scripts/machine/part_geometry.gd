@@ -11,6 +11,27 @@ const SURFACE_FRICTION := 0.6
 const SPAWN_INTERVAL := 30
 const HOPPER_GAP := 18.0
 const PANEL_THICKNESS := 6.0
+
+## Crushers. The gap between a pair of rollers decides what falls straight through:
+## a large crusher's 10 px gap passes bits (9 px at most) but stops chunks (11 px at least);
+## a small crusher's 5.2 px gap passes gravel (under 5 px) but stops bits (6 px at least).
+const LARGE_ROLLER := 11.0
+const SMALL_ROLLER := 5.4
+## How fast the roller surfaces move, pulling what sits on them in toward the gap.
+const ROLLER_SPEED := 40.0
+const ROLLER_FRICTION := 0.9
+## Ticks to crush one item (60 ticks = 1 second). A small crusher makes 3 gravel per bit at
+## a third of the time, so one large crusher feeds one small crusher evenly.
+const LARGE_CRUSH_TICKS := 24
+const SMALL_CRUSH_TICKS := 8
+const CRUSH_PIECES := 3
+## Points of a unit circle every 30°, clockwise on screen, as exact numbers so rollers are
+## bit-identical everywhere. Starting at 0° puts a corner right at the gap.
+const CIRCLE_12 := [
+	1.0, 0.0, 0.8660254037844386, 0.5, 0.5, 0.8660254037844386, 0.0, 1.0,
+	-0.5, 0.8660254037844386, -0.8660254037844386, 0.5, -1.0, 0.0, -0.8660254037844386, -0.5,
+	-0.5, -0.8660254037844386, 0.0, -1.0, 0.5, -0.8660254037844386, 0.8660254037844386, -0.5,
+]
 ## Which tile edge a panel lies along, by variant (clockwise from the top), and the side
 ## that edge faces.
 const PANEL_SIDES: Array[Vector2i] = [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
@@ -43,6 +64,25 @@ static func build(machine: Machine) -> Simulation:
 				_solid(sim, x1, y0, x1, y1)
 			&"panel":
 				_add_panel(sim, machine, p)
+			&"large_crusher":
+				# Two big rollers side by side, turning in toward each other at the top.
+				var mid := x0 + T
+				_add_roller(sim, x0 + T * 0.5, y0 + T * 0.5, LARGE_ROLLER, ROLLER_SPEED)
+				_add_roller(sim, x1 - T * 0.5, y0 + T * 0.5, LARGE_ROLLER, -ROLLER_SPEED)
+				_add_crusher_housing(sim, x0, y0, x1, y0 + T * 0.5, T * 0.5 - LARGE_ROLLER)
+				sim.add_crusher(&"chunk", &"bit", CRUSH_PIECES, LARGE_CRUSH_TICKS,
+						Rect2(mid - 7.0, y0 - 4.0, 14.0, T * 0.5 + 4.0), mid, y1)
+			&"small_crusher":
+				# Four small rollers in the corners: the top pair crushes, the bottom pair
+				# guides the gravel out. Each pair turns in toward its own gap.
+				var mid := x0 + T * 0.5
+				for row in 2:
+					var cy := y0 + T * (0.25 + row * 0.5)
+					_add_roller(sim, x0 + T * 0.25, cy, SMALL_ROLLER, ROLLER_SPEED)
+					_add_roller(sim, x0 + T * 0.75, cy, SMALL_ROLLER, -ROLLER_SPEED)
+				_add_crusher_housing(sim, x0, y0, x1, y0 + T * 0.25, T * 0.25 - SMALL_ROLLER)
+				sim.add_crusher(&"bit", &"gravel", CRUSH_PIECES, SMALL_CRUSH_TICKS,
+						Rect2(mid - 5.0, y0 - 6.0, 10.0, T * 0.25 + 6.0), mid, y1)
 			&"ramp":
 				_add_ramp(sim, machine, p, x0, y0, x1, y1)
 			&"hopper":
@@ -162,6 +202,26 @@ static func _add_ramp(sim: Simulation, machine: Machine, p: Part, x0: float, y0:
 			_solid(sim, x0, y1, x0, y0)
 	if not has_full_edge(machine, p.cell + Vector2i.DOWN, Vector2i.UP):
 		_solid(sim, x1, y1, x0, y1)
+
+
+## A roller as a 12-sided outline whose surface moves at `speed` (positive turns clockwise
+## on screen, so the top of a left-hand roller moves right, toward the gap).
+static func _add_roller(sim: Simulation, cx: float, cy: float, radius: float, speed: float) -> void:
+	for i in 12:
+		var j := (i + 1) % 12
+		sim.add_segment(Segment.new(
+				cx + CIRCLE_12[i * 2] * radius, cy + CIRCLE_12[i * 2 + 1] * radius,
+				cx + CIRCLE_12[j * 2] * radius, cy + CIRCLE_12[j * 2 + 1] * radius,
+				speed, ROLLER_FRICTION))
+
+
+## Side walls down to the top rollers' middle (`roller_y`), then a short ledge in to each
+## roller's outer corner, so nothing slips down the outside of the rollers.
+static func _add_crusher_housing(sim: Simulation, x0: float, y0: float, x1: float, roller_y: float, ledge: float) -> void:
+	_solid(sim, x0, y0, x0, roller_y)
+	_solid(sim, x0, roller_y, x0 + ledge, roller_y)
+	_solid(sim, x1, roller_y, x1, y0)
+	_solid(sim, x1 - ledge, roller_y, x1, roller_y)
 
 
 static func _solid(sim: Simulation, ax: float, ay: float, bx: float, by: float, speed := 0.0, friction := SURFACE_FRICTION, passes: StringName = &"") -> void:

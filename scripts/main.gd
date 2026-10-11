@@ -91,8 +91,10 @@ func _handle_key(keycode: Key) -> void:
 		_cycle_filter()
 	elif keycode == KEY_HOME:
 		_frame_camera()
-	elif keycode >= KEY_1 and keycode < KEY_1 + PartDefs.ORDER.size():
+	elif keycode >= KEY_1 and keycode <= KEY_9 and keycode - KEY_1 < PartDefs.ORDER.size():
 		_select(PartDefs.ORDER[keycode - KEY_1])
+	elif keycode == KEY_0 and PartDefs.ORDER.size() >= 10:
+		_select(PartDefs.ORDER[9])
 
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:

@@ -13,13 +13,15 @@ const OUTLINE := Color(0, 0, 0, 0.35)
 const BELT := Color(0.15, 0.15, 0.16)
 const BELT_MARK := Color(0.80, 0.68, 0.30)
 const ITEM_OUTLINE := Color(0, 0, 0, 0.45)
+const ROLLER := Color(0.24, 0.24, 0.25)
+const ROLLER_TOOTH := Color(0.55, 0.55, 0.57)
 
 var machine: Machine
 var sim: Simulation
 ## Placement preview, or null when there's nothing to preview.
 var ghost: Part = null
 var ghost_valid := true
-## [kind, shape] -> drawing polygons ("body", "fleck", "outline") sized for that kind.
+## [kind, size, shape] -> drawing polygons ("body", "fleck", "outline") sized for that kind.
 var _item_polys := {}
 
 
@@ -41,6 +43,9 @@ func _draw() -> void:
 	if sim:
 		for it in sim.items:
 			_draw_item(it)
+		for cr in sim.crushers:
+			if cr.held != null:
+				_draw_crushing(cr)
 		draw_set_transform_matrix(Transform2D.IDENTITY)
 	elif ghost != null:
 		var tint := Color(1, 1, 1, 0.55) if ghost_valid else Color(1, 0.35, 0.35, 0.55)
@@ -49,7 +54,7 @@ func _draw() -> void:
 
 ## The item's real collision outline, with a lighter fleck so you can see it turn.
 func _draw_item(it: Item) -> void:
-	var key := [it.kind, it.shape]
+	var key := [it.kind, it.size, it.shape]
 	if not _item_polys.has(key):
 		_item_polys[key] = _build_item_polys(it)
 	var polys: Dictionary = _item_polys[key]
@@ -58,6 +63,24 @@ func _draw_item(it: Item) -> void:
 	draw_colored_polygon(polys["body"], def["color"])
 	draw_colored_polygon(polys["fleck"], def["fleck"])
 	draw_polyline(polys["outline"], ITEM_OUTLINE, 1.0, true)
+
+
+## The item being crushed sinks into the gap, shrinking and shaking, until its pieces
+## drop out the bottom as real items.
+func _draw_crushing(cr: Simulation.Crusher) -> void:
+	var t := cr.progress()
+	var it := cr.held
+	var key := [it.kind, it.size, it.shape]
+	if not _item_polys.has(key):
+		_item_polys[key] = _build_item_polys(it)
+	var gap_y := cr.max_y
+	var pos := Vector2(lerpf(cr.held_x, cr.exit_x, t), lerpf(cr.held_y, gap_y, t))
+	pos += Vector2(sin(sim.tick * 2.3), cos(sim.tick * 1.7)) * 0.8
+	var scale := lerpf(1.0, 0.45, t)
+	var def: Dictionary = ItemDefs.DEFS[it.kind]
+	draw_set_transform_matrix(Transform2D(Vector2(it.c, it.s) * scale, Vector2(-it.s, it.c) * scale, pos))
+	draw_colored_polygon(_item_polys[key]["body"], def["color"])
+	draw_polyline(_item_polys[key]["outline"], ITEM_OUTLINE, 1.0, true)
 
 
 func _build_item_polys(it: Item) -> Dictionary:
@@ -98,6 +121,18 @@ func _draw_part(p: Part, tint: Color) -> void:
 			_draw_conveyor(rect, color, flipped, tint)
 		&"sorter":
 			_draw_sorter(rect, color, flipped, p.filter, tint)
+		&"large_crusher":
+			_draw_crusher_frame(rect, color, T * 0.5, tint)
+			var r := PartGeometry.LARGE_ROLLER
+			_draw_roller(rect.position + Vector2(T * 0.5, T * 0.5), r, 1.0, tint)
+			_draw_roller(rect.position + Vector2(T * 1.5, T * 0.5), r, -1.0, tint)
+		&"small_crusher":
+			_draw_crusher_frame(rect, color, T * 0.25, tint)
+			var r := PartGeometry.SMALL_ROLLER
+			for row in 2:
+				var cy := T * (0.25 + row * 0.5)
+				_draw_roller(rect.position + Vector2(T * 0.25, cy), r, 1.0, tint)
+				_draw_roller(rect.position + Vector2(T * 0.75, cy), r, -1.0, tint)
 		&"panel":
 			var slab := PartGeometry.panel_rect(p)
 			draw_rect(slab, color)
@@ -129,6 +164,29 @@ func _draw_part(p: Part, tint: Color) -> void:
 			draw_polyline(PackedVector2Array([
 				Vector2(l, rect.position.y), Vector2(l, rect.end.y), Vector2(r, rect.end.y), Vector2(r, rect.position.y),
 			]), color, 4.0)
+
+
+## Side walls down to the top rollers' middle (`wall_depth` below the top).
+func _draw_crusher_frame(rect: Rect2, color: Color, wall_depth: float, tint: Color) -> void:
+	draw_rect(rect, BELT * Color(1, 1, 1, 0.35) * tint)
+	draw_rect(Rect2(rect.position, Vector2(3, wall_depth)), color)
+	draw_rect(Rect2(Vector2(rect.end.x - 3, rect.position.y), Vector2(3, wall_depth)), color)
+
+
+## A toothed roller, turning clockwise for `direction` 1 and counterclockwise for -1.
+func _draw_roller(center: Vector2, radius: float, direction: float, tint: Color) -> void:
+	var turn := 0.0
+	if sim:
+		turn = sim.tick / float(Simulation.TICK_RATE) * PartGeometry.ROLLER_SPEED / radius * direction
+	var teeth := 10 if radius > 8.0 else 6
+	var tooth := radius * 0.28
+	var body := PackedVector2Array()
+	for i in teeth * 2:
+		var a := turn + TAU * i / (teeth * 2)
+		body.append(center + Vector2.from_angle(a) * (radius if i % 2 == 0 else radius - tooth))
+	draw_colored_polygon(body, ROLLER_TOOTH * tint)
+	draw_circle(center, radius - tooth, ROLLER * tint)
+	draw_circle(center, radius * 0.25, ROLLER_TOOTH * tint)
 
 
 func _draw_box(rect: Rect2, color: Color, tint: Color) -> void:
@@ -176,7 +234,7 @@ func _draw_sorter(rect: Rect2, color: Color, flipped: bool, filter: StringName, 
 	# What it drops, with an arrow pointing down through the chute.
 	if ItemDefs.DEFS.has(filter):
 		var icon := PackedVector2Array()
-		var outline := ItemDefs.outline(filter, 0)
+		var outline := ItemDefs.outline(filter, &"chunk", 0)
 		var center := rect.position + Vector2(16, 17)
 		for i in outline.size() / 2:
 			icon.append(center + Vector2(outline[i * 2], outline[i * 2 + 1]) * 0.8)

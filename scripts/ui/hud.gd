@@ -9,8 +9,9 @@ signal demo_pressed
 
 ## Screen space the HUD covers above and below the world, for framing the camera.
 const TOP_MARGIN := 56.0
-const BOTTOM_MARGIN := 48.0
-const HELP := "Left click: place   Right click: remove   R: turn   F: sorter filter   1-8: pick part\nSpace: play/stop   Middle drag or WASD: pan   Wheel: zoom   Home: re-center"
+const BOTTOM_MARGIN := 72.0
+const TOOLBAR_HEIGHT := 44.0
+const HELP := "Left click: place   Right click: remove   R: turn   F: sorter filter   1-9, 0: pick part\nSpace: play/stop   Middle drag or WASD: pan   Wheel: zoom   Home: re-center"
 
 var _part_buttons := {}  # StringName -> Button
 var _play_button: Button
@@ -51,7 +52,7 @@ func _ready() -> void:
 	panel.anchor_right = 1.0
 	panel.anchor_top = 1.0
 	panel.anchor_bottom = 1.0
-	panel.offset_top = -BOTTOM_MARGIN
+	panel.offset_top = -TOOLBAR_HEIGHT
 	panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(panel)
@@ -63,7 +64,8 @@ func _ready() -> void:
 	var group := ButtonGroup.new()
 	for i in PartDefs.ORDER.size():
 		var type: StringName = PartDefs.ORDER[i]
-		var button := _make_button("%d  %s" % [i + 1, PartDefs.DEFS[type]["name"]])
+		var button := _make_button("%d %s" % [(i + 1) % 10, PartDefs.DEFS[type]["name"]])
+		button.add_theme_font_size_override("font_size", 14)
 		button.toggle_mode = true
 		button.button_group = group
 		button.tooltip_text = PartDefs.DEFS[type]["hint"]
@@ -83,12 +85,24 @@ func _ready() -> void:
 	_demo_button.pressed.connect(func() -> void: demo_pressed.emit())
 	row.add_child(_demo_button)
 
-	row.add_child(VSeparator.new())
+	# The selected part's description, in a strip just above the toolbar.
+	var hint_bar := PanelContainer.new()
+	hint_bar.anchor_right = 1.0
+	hint_bar.anchor_top = 1.0
+	hint_bar.anchor_bottom = 1.0
+	hint_bar.offset_top = -BOTTOM_MARGIN
+	hint_bar.offset_bottom = -TOOLBAR_HEIGHT
+	hint_bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	hint_bar.self_modulate = Color(1, 1, 1, 0.7)
+	add_child(hint_bar)
+	var hint_pad := MarginContainer.new()
+	hint_pad.add_theme_constant_override("margin_left", 12)
+	hint_bar.add_child(hint_pad)
 	_hint = Label.new()
-	_hint.modulate = Color(1, 1, 1, 0.6)
-	_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hint.modulate = Color(1, 1, 1, 0.75)
+	_hint.add_theme_font_size_override("font_size", 14)
 	_hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(_hint)
+	hint_pad.add_child(_hint)
 
 
 func set_selected(type: StringName) -> void:

@@ -6,9 +6,10 @@ class_name PartDefs
 
 const TILE := 32
 
-## Toolbar order (also the number-key hotkeys).
+## Toolbar order (also the number-key hotkeys 1-9, then 0).
 const ORDER: Array[StringName] = [
-	&"spawner", &"conveyor", &"sorter", &"ramp", &"hopper", &"block", &"panel", &"bin",
+	&"spawner", &"conveyor", &"sorter", &"ramp", &"hopper",
+	&"large_crusher", &"small_crusher", &"block", &"panel", &"bin",
 ]
 
 const DEFS := {
@@ -46,6 +47,20 @@ const DEFS := {
 		"variants": 1,
 		"color": Color(0.55, 0.45, 0.30),
 		"hint": "Funnels items through a narrow gap at the bottom.",
+	},
+	&"large_crusher": {
+		"name": "Large Crusher",
+		"size": Vector2i(2, 1),
+		"variants": 1,
+		"color": Color(0.40, 0.36, 0.33),
+		"hint": "Two big toothed rollers crush each chunk into 3 bits, one at a time. Bits and gravel fall straight through.",
+	},
+	&"small_crusher": {
+		"name": "Small Crusher",
+		"size": Vector2i(1, 1),
+		"variants": 1,
+		"color": Color(0.40, 0.36, 0.33),
+		"hint": "Four small rollers crush each bit into 3 gravel. Gravel falls through; a chunk is too big and clogs it.",
 	},
 	&"block": {
 		"name": "Block",

@@ -73,7 +73,7 @@ class Bin:
 	var max_x: float
 	var max_y: float
 	var caught := 0
-	## Items caught, by kind.
+	## Items caught, by "kind size" (e.g. &"rock gravel").
 	var by_kind := {}
 
 	func _init(p_min_x: float, p_min_y: float, p_max_x: float, p_max_y: float) -> void:
@@ -84,6 +84,38 @@ class Bin:
 
 	func contains(px: float, py: float) -> bool:
 		return px > min_x and px < max_x and py > min_y and py < max_y
+
+
+## Crushes one item at a time. An item of the size it takes that settles into its intake
+## (the gap between its rollers) is pulled in, held for `duration` ticks while it's crushed,
+## then comes out the bottom as `pieces` items of the next size down. Smaller items never
+## get caught; they fall through the gap on their own.
+class Crusher:
+	var takes: StringName
+	var makes: StringName
+	var pieces: int
+	var duration: int
+	var min_x: float
+	var min_y: float
+	var max_x: float
+	var max_y: float
+	var exit_x: float
+	var exit_y: float
+	## The item being crushed (out of the physics while inside), and where it was caught.
+	var held: Item = null
+	var held_x := 0.0
+	var held_y := 0.0
+	var timer := 0
+
+	func _init(p_takes: StringName, p_makes: StringName, p_pieces: int, p_duration: int) -> void:
+		takes = p_takes
+		makes = p_makes
+		pieces = p_pieces
+		duration = p_duration
+
+	## 0 when it starts crushing, 1 when done.
+	func progress() -> float:
+		return 1.0 - float(timer) / duration
 
 
 ## Contacts found this substep. Item A is always awake and is pushed along the normal;
@@ -112,6 +144,7 @@ var items: Array[Item] = []
 var segments: Array[Segment] = []
 var spawners: Array[Spawner] = []
 var bins: Array[Bin] = []
+var crushers: Array[Crusher] = []
 var tick := 0
 var lost := 0
 ## Items consumed by bins, by kind.
@@ -160,6 +193,19 @@ func add_bin(min_x: float, min_y: float, max_x: float, max_y: float) -> void:
 	bins.append(Bin.new(min_x, min_y, max_x, max_y))
 
 
+## `intake` is where a waiting item gets pulled in; pieces come out at `exit`, falling.
+func add_crusher(takes: StringName, makes: StringName, pieces: int, duration: int, intake: Rect2, exit_x: float, exit_y: float) -> Crusher:
+	var crusher := Crusher.new(takes, makes, pieces, duration)
+	crusher.min_x = intake.position.x
+	crusher.min_y = intake.position.y
+	crusher.max_x = intake.end.x
+	crusher.max_y = intake.end.y
+	crusher.exit_x = exit_x
+	crusher.exit_y = exit_y
+	crushers.append(crusher)
+	return crusher
+
+
 ## Call once after adding all segments. Joins straight runs (a row of conveyors becomes one
 ## long belt) so items glide across seams instead of catching on the joints.
 func finish_build() -> void:
@@ -182,6 +228,7 @@ func finish_build() -> void:
 
 func step() -> void:
 	_run_spawners()
+	_run_crushers()
 	for it in items:
 		it.prev_x = it.x
 		it.prev_y = it.y
@@ -245,6 +292,50 @@ func _run_spawners() -> void:
 		item.update_world()
 		items.append(item)
 		sp.count += 1
+
+
+func _run_crushers() -> void:
+	for cr in crushers:
+		if cr.held == null:
+			for it in items:
+				if it.size == cr.takes and it.x > cr.min_x and it.x < cr.max_x and it.y > cr.min_y and it.y < cr.max_y:
+					cr.held = it
+					cr.held_x = it.x
+					cr.held_y = it.y
+					cr.timer = cr.duration
+					items.erase(it)
+					_wake_near(it.x, it.y)
+					break
+		elif cr.timer > 0:
+			cr.timer -= 1
+		elif not _is_blocked_near(cr.exit_x, cr.exit_y + ItemDefs.size_of(cr.held.kind, cr.makes) * 2.0, ItemDefs.size_of(cr.held.kind, cr.makes) * 3.0):
+			_release_pieces(cr)
+
+
+## The crushed item comes out as several smaller pieces in a fixed little spread.
+func _release_pieces(cr: Crusher) -> void:
+	var held := cr.held
+	var piece_size := ItemDefs.size_of(held.kind, cr.makes)
+	var rotations := SPAWN_ROTATIONS.size() / 2
+	for k in cr.pieces:
+		var side := k - (cr.pieces - 1) * 0.5
+		var rot := ((held.shape + k) % rotations) * 2
+		var piece := Item.new(held.kind, cr.exit_x + side * piece_size * 1.3, cr.exit_y + piece_size * (1.2 + (k % 2)),
+				(held.shape + k + 1) % ItemDefs.SHAPES.size(), SPAWN_ROTATIONS[rot], SPAWN_ROTATIONS[rot + 1], cr.makes)
+		piece.vx = side * 15.0
+		piece.vy = 40.0
+		items.append(piece)
+	cr.held = null
+
+
+## True if any item's center is within `reach` of (x, y).
+func _is_blocked_near(x: float, y: float, reach: float) -> bool:
+	for it in items:
+		var dx := it.x - x
+		var dy := it.y - y
+		if dx * dx + dy * dy < reach * reach:
+			return true
+	return false
 
 
 func _is_blocked(x: float, y: float) -> bool:
@@ -393,14 +484,17 @@ func _detect_wall(ia: int, a: Item, si: int) -> void:
 	var sg := segments[si]
 	if sg.passes == a.kind:
 		return
-	var side := (a.x - sg.ax) * sg.nx + (a.y - sg.ay) * sg.ny
-	if absf(side) >= a.radius:
-		return
 	var along := (a.x - sg.ax) * sg.tx + (a.y - sg.ay) * sg.ty
 	if along < -a.radius or along * along > (sqrt(sg.len_sq) + a.radius) ** 2:
 		return
-	var nx := sg.nx if side >= 0.0 else -sg.nx
-	var ny := sg.ny if side >= 0.0 else -sg.ny
+	# Push back toward the side the center was on at the start of the substep, so a small
+	# fast item that got all the way across a thin wall still goes back where it came from.
+	var side := (a.x - sg.ax) * sg.nx + (a.y - sg.ay) * sg.ny
+	var was := (a.step_x - sg.ax) * sg.nx + (a.step_y - sg.ay) * sg.ny
+	if absf(side) >= a.radius and (side >= 0.0) == (was >= 0.0):
+		return
+	var nx := sg.nx if was >= 0.0 else -sg.nx
+	var ny := sg.ny if was >= 0.0 else -sg.ny
 	for k in a.count:
 		var px := a.world[k * 2]
 		var py := a.world[k * 2 + 1]
@@ -830,7 +924,8 @@ func _collect() -> void:
 		for b in bins:
 			if b.contains(it.x, it.y):
 				b.caught += 1
-				b.by_kind[it.kind] = b.by_kind.get(it.kind, 0) + 1
+				var key := StringName("%s %s" % [it.kind, it.size])
+				b.by_kind[key] = b.by_kind.get(key, 0) + 1
 				delivered[it.kind] = delivered.get(it.kind, 0) + 1
 				caught = true
 				break
@@ -840,14 +935,19 @@ func _collect() -> void:
 			kept.append(it)
 	items = kept
 
-	var reach := MAX_RADIUS * 2.0 + SUPPORT_GAP
 	for r in removed:
-		for it in items:
-			if it.sleeping:
-				var dx := it.x - r.x
-				var dy := it.y - r.y
-				if dx * dx + dy * dy < reach * reach:
-					_wake(it)
+		_wake_near(r.x, r.y)
+
+
+## Wakes sleepers that could have been resting on something at (x, y) that just left.
+func _wake_near(x: float, y: float) -> void:
+	var reach := MAX_RADIUS * 2.0 + SUPPORT_GAP
+	for it in items:
+		if it.sleeping:
+			var dx := it.x - x
+			var dy := it.y - y
+			if dx * dx + dy * dy < reach * reach:
+				_wake(it)
 
 
 ## Joins touching horizontal or vertical segments that lie on the same line and behave the

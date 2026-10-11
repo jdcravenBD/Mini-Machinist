@@ -33,8 +33,8 @@ func _sorter_splits() -> bool:
 		else:
 			end = b.by_kind
 	print("Sorter: under it %s, at the end %s, lost %d" % [under, end, sim.lost])
-	return under.get(&"iron_ore", 0) == 0 and end.get(&"rock", 0) == 0 \
-		and under.get(&"rock", 0) > 5 and end.get(&"iron_ore", 0) > 10 and sim.lost == 0
+	return under.get(&"iron_ore chunk", 0) == 0 and end.get(&"rock chunk", 0) == 0 \
+		and under.get(&"rock chunk", 0) > 5 and end.get(&"iron_ore chunk", 0) > 10 and sim.lost == 0
 
 
 ## A basin made only of panels (floor plus two walls) should hold everything poured in.

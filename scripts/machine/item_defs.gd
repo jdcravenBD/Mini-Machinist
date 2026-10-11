@@ -1,12 +1,13 @@
 class_name ItemDefs
-## Catalog of every item kind. An item's drawn outline IS its collision shape, so what
-## you see is exactly how it tips, stacks and settles.
-##
-## `size` scales the unit outline into pixels (a tile is 32).
+## Catalog of item materials and sizes. An item is a material (iron ore, rock, later coal…)
+## at a size: a chunk as mined, bits from a large crusher, gravel from a small crusher.
+## An item's drawn outline IS its collision shape, so what you see is exactly how it tips,
+## stacks and settles, and whether it fits through a gap.
 
 ## Order used when cycling a sorter's filter.
 const ORDER: Array[StringName] = [&"iron_ore", &"rock"]
 
+## "size" is a chunk's scale in pixels (a tile is 32); smaller sizes scale down from it.
 const DEFS := {
 	&"iron_ore": {
 		"name": "Iron Ore",
@@ -22,6 +23,14 @@ const DEFS := {
 	},
 }
 
+## Sizes from largest to smallest. Three pieces of the next size down hold about the same
+## amount of material as one piece of the size above (0.55² × 3 ≈ 0.9).
+const SIZES := {
+	&"chunk": {"name": "Chunk", "scale": 1.0},
+	&"bit": {"name": "Bits", "scale": 0.55},
+	&"gravel": {"name": "Gravel", "scale": 0.3},
+}
+
 ## Lumpy convex outlines of radius ~1, as flat x, y pairs going clockwise on screen.
 ## Written out as exact numbers (not computed with sin/cos) so every machine builds
 ## bit-identical shapes. Each item picks one, so piles aren't copies of one pebble.
@@ -33,15 +42,21 @@ const SHAPES := [
 ]
 
 
-static func size_of(kind: StringName) -> float:
-	return DEFS[kind]["size"]
+## Scale in pixels of `kind` at `size`.
+static func size_of(kind: StringName, size: StringName) -> float:
+	return DEFS[kind]["size"] * SIZES[size]["scale"]
 
 
-## The outline for `kind` in pixels, centered on its center of mass. Flat x, y pairs.
-static func outline(kind: StringName, shape: int) -> PackedFloat64Array:
+## "Iron Ore Chunk", "Rock Gravel", …
+static func display_name(kind: StringName, size: StringName) -> String:
+	return "%s %s" % [DEFS[kind]["name"], SIZES[size]["name"]]
+
+
+## The outline in pixels, centered on its center of mass. Flat x, y pairs.
+static func outline(kind: StringName, size: StringName, shape: int) -> PackedFloat64Array:
 	var unit: Array = SHAPES[shape]
-	var size := size_of(kind)
+	var scale := size_of(kind, size)
 	var points := PackedFloat64Array()
 	for v in unit:
-		points.append(v * size)
+		points.append(v * scale)
 	return Shape.recentered(points)
