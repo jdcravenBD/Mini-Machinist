@@ -7,8 +7,11 @@ const T := PartDefs.TILE
 const PAN_SPEED := 600.0
 ## Closest zoom allowed, and the most the camera zooms in when framing a small machine.
 ## The farthest zoom is whatever fits the whole grid on screen.
-const ZOOM_MAX := 4.0
-const FRAME_ZOOM_MAX := 2.0
+## Zoom levels the wheel steps through. Whole numbers keep the pixel art's pixels square;
+## one half is there for a wide view of everything.
+const ZOOM_STEPS := [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+## The closest zoom used when framing a small machine.
+const FRAME_ZOOM_MAX := 3.0
 ## Empty space (in tiles) kept around the machine when framing it.
 const FRAME_MARGIN := 2
 ## Most simulation ticks to run in one frame, so a slow frame can't snowball.
@@ -103,10 +106,10 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			_panning = event.pressed
 		MOUSE_BUTTON_WHEEL_UP:
 			if event.pressed:
-				_zoom_at(event.position, 1.1)
+				_zoom_at(event.position, 1)
 		MOUSE_BUTTON_WHEEL_DOWN:
 			if event.pressed:
-				_zoom_at(event.position, 1.0 / 1.1)
+				_zoom_at(event.position, -1)
 		MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT:
 			if not event.pressed:
 				_paint_button = MOUSE_BUTTON_NONE
@@ -197,10 +200,13 @@ func _pan_with_keys(delta: float) -> void:
 
 
 ## Zooms while keeping the world point under the mouse in place.
-func _zoom_at(screen_pos: Vector2, factor: float) -> void:
+## Steps one zoom level in (direction 1) or out (-1), keeping the world point under the
+## mouse in place.
+func _zoom_at(screen_pos: Vector2, direction: int) -> void:
 	var half := get_viewport_rect().size * 0.5
 	var world := camera.position + (screen_pos - half) / camera.zoom
-	var z := clampf(camera.zoom.x * factor, _fit_zoom(_world_rect()), ZOOM_MAX)
+	var index := clampi(ZOOM_STEPS.find(camera.zoom.x) + direction, 0, ZOOM_STEPS.size() - 1)
+	var z: float = ZOOM_STEPS[index]
 	camera.zoom = Vector2(z, z)
 	camera.position = world - (screen_pos - half) / camera.zoom
 
@@ -214,7 +220,11 @@ func _frame_camera() -> void:
 		for p in machine.parts:
 			area = area.merge(Rect2(Vector2(p.cell * T), Vector2(PartDefs.size_of(p.type) * T)))
 		area = area.grow(FRAME_MARGIN * T)
-	var z := clampf(_fit_zoom(area), _fit_zoom(_world_rect()), FRAME_ZOOM_MAX)
+	# The closest zoom level that fits it all.
+	var z: float = ZOOM_STEPS[0]
+	for step in ZOOM_STEPS:
+		if step <= minf(_fit_zoom(area), FRAME_ZOOM_MAX):
+			z = step
 	camera.zoom = Vector2(z, z)
 	# The HUD bars differ in height, so shift to center in the space between them.
 	var offset_y := (Hud.TOP_MARGIN - Hud.BOTTOM_MARGIN) * 0.5
