@@ -1,5 +1,5 @@
 extends SceneTree
-## Checks the sorter and panels do their jobs. Exits 1 on failure.
+## Checks the sorter, belts and panels do their jobs. Exits 1 on failure.
 ## Usage: godot --headless --path . --script res://tests/parts_test.gd
 
 
@@ -7,6 +7,7 @@ func _init() -> void:
 	var ok := _sorter_splits()
 	ok = _sorters_in_a_row() and ok
 	ok = _panel_basin_holds() and ok
+	ok = _belt_end_clean() and ok
 	print("Parts: %s" % ("PASS" if ok else "FAIL"))
 	quit(0 if ok else 1)
 
@@ -89,3 +90,37 @@ func _panel_basin_holds() -> bool:
 		lowest = maxf(lowest, sim.item(i)["y"])
 	print("Panel basin: %d items held, lost %d, lowest at y %.1f (floor top at %d)" % [sim.item_count(), sim.lost, lowest, 12 * PartDefs.TILE])
 	return sim.lost == 0 and sim.item_count() > 30 and lowest < 12 * PartDefs.TILE
+
+
+## Chunks of every shape riding off the end of a belt tip over the edge and fall without
+## catching on it (never knocked backward), and a chunk the sorter drops falls out of its
+## bottom already moving down, with no stop inside.
+func _belt_end_clean() -> bool:
+	var machine := Machine.new()
+	for x in range(4, 10):
+		if x != 7:
+			machine.place(&"conveyor", Vector2i(x, 5))
+	machine.place(&"sorter", Vector2i(7, 5), 0, &"rock")
+	for x in range(4, 16):
+		machine.place(&"panel", Vector2i(x, 9), 2)
+	var caught := 0
+	for shape in ItemDefs.SHAPES.size():
+		var sim := PartGeometry.build(machine)
+		sim.add_item(&"iron_ore", &"chunk", shape, 270.0, 150.0)
+		for i in 240:
+			sim.step()
+			var it := sim.item(0)
+			if it["x"] > 290.0 and it["y"] < 190.0 and it["vx"] < 0.0:
+				caught += 1
+				break
+	var sim := PartGeometry.build(machine)
+	sim.add_item(&"rock", &"chunk", 1, 200.0, 150.0)
+	var stalled := false
+	for i in 200:
+		sim.step()
+		var it := sim.item(0)
+		# Below the belt, inside the box and out the bottom: always falling.
+		if it["y"] > 165.0 and it["y"] < 240.0 and it["vy"] < 20.0:
+			stalled = true
+	print("Belt end: %d of %d shapes caught on the edge; sorted rock stalls on its way down: %s" % [caught, ItemDefs.SHAPES.size(), stalled])
+	return caught == 0 and not stalled

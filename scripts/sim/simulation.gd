@@ -173,8 +173,8 @@ static func _flat(points: PackedVector2Array, origin: Vector2) -> PackedFloat64A
 
 
 ## A sorter: `box` with a passage through it from `pass_top` down to the belt at `belt_y`,
-## running at `belt_vx`. Items of the `filter` material are taken out halfway through and drop
-## out the bottom; items landing within `top_reach` above its roof are taken in too.
+## running at `belt_vx` (its grate is plain segments that let `filter` through). Items landing
+## within `top_reach` above its roof are taken in and set down on that belt inside.
 func add_sorter(box: Rect2, pass_top: float, belt_y: float, top_reach: float, filter: StringName, belt_vx: float) -> void:
 	world.add_sorter(box.position.x, box.position.y, box.end.x, box.end.y, pass_top, belt_y, top_reach,
 			ItemDefs.ORDER.find(filter), belt_vx)

@@ -94,10 +94,10 @@ public:
 	};
 
 	// A tall box on a belt line with a passage through it (from pass_top down to the belt at
-	// belt_y). Items ride in through the passage, hidden by the box; one of the `filter`
-	// material is taken out at the middle and drops out the bottom, the rest ride on through.
-	// Items landing on its roof are taken in too, and come out the bottom or onto the belt
-	// inside, in the order they went in.
+	// belt_y). Items ride in through the passage, hidden by the box; the far half of its belt
+	// and its bottom are a grate the `filter` material falls through (plain segments that let
+	// it pass), so those really drop out the bottom. Items landing on its roof are taken in
+	// and set down on the belt inside, in the order they went in.
 	struct Sorter {
 		// The box.
 		double x0, y0, x1, y1;
@@ -229,10 +229,8 @@ private:
 	static constexpr double SUPPORT_SLOPE = 0.3;
 	static constexpr int PASS_TICKS = 6;
 	static constexpr double BELT_PRESS = 0.15;
-	// How many items a sorter takes in through its roof at once, how many it holds in all, and
-	// how long each stays inside.
+	// How many items a sorter takes in through its roof at once, and how long each stays inside.
 	static constexpr int SORTER_HOLDS = 3;
-	static constexpr int SORTER_MAX_HELD = 8;
 	static constexpr int SORTER_TICKS = 12;
 
 	// Heat: a grid of HEAT_CELL-pixel cells, each made of a material that sets how well it

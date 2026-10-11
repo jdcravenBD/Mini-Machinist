@@ -17,6 +17,8 @@ const CONVEYOR_HEIGHT := 16.0
 ## cell above, which it takes up), with a passage this tall through it along the belt.
 const SORTER_HOOD := 32.0
 const SORTER_PASSAGE := 24.0
+## How far below the belt a sorter's end walls start where the belt runs on past them.
+const SORTER_WALL_DROP := 4.0
 ## How far above its roof a sorter takes in items that land there.
 const SORTER_TOP_REACH := 18.0
 
@@ -142,12 +144,26 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 	return false
 
 
-## A conveyor with a box over it. Items ride in through the passage, out of sight; halfway
-## through, ones of the sorter's material are taken out and drop out the bottom, and the rest
-## ride on out the far side. What lands on its roof is taken in too. A row of sorters makes one
-## smooth passage.
+## A conveyor with a box over it. Items ride in through the passage, out of sight. The far
+## half of its belt, and its bottom, are a grate only the sorter's material falls through, so
+## those drop out the bottom halfway through and the rest ride on out the far side. What lands
+## on its roof is taken in too. A row of sorters makes one smooth passage.
 static func _add_sorter(sim: Simulation, machine: Machine, p: Part, x0: float, y0: float, x1: float) -> void:
-	_add_conveyor(sim, machine, p)
+	# No solid tile: what drops through the grate has to pass through the body.
+	var y1 := y0 + CONVEYOR_HEIGHT
+	var mid := (x0 + x1) * 0.5
+	var speed := belt_speed(p)
+	var near_half := &"" if speed > 0.0 else p.filter
+	var far_half := p.filter if speed > 0.0 else &""
+	sim.add_segment(Segment.new(x0, y0, mid, y0, speed, BELT_FRICTION, near_half, true))
+	sim.add_segment(Segment.new(mid, y0, x1, y0, speed, BELT_FRICTION, far_half, true))
+	_solid(sim, x1, y1, x0, y1, 0.0, SURFACE_FRICTION, p.filter)
+	# Its ends, which also keep what falls through the grate from drifting into the next box.
+	# Where the belt runs on, they start a little below it so nothing riding over can snag.
+	var right_top := y0 + SORTER_WALL_DROP if _belt_continues(machine, p.cell + Vector2i.RIGHT, Vector2i.LEFT) else y0
+	var left_top := y0 + SORTER_WALL_DROP if _belt_continues(machine, p.cell + Vector2i.LEFT, Vector2i.RIGHT) else y0
+	_solid(sim, x1, right_top, x1, y1)
+	_solid(sim, x0, y1, x0, left_top)
 	var top := y0 - SORTER_HOOD
 	var roof := y0 - SORTER_PASSAGE
 	_solid(sim, x0, top, x1, top)

@@ -628,24 +628,19 @@ void ItemWorld::_run_crushers() {
 	}
 }
 
-// Takes in items of each sorter's material once they're halfway through its passage, and
-// whatever lands on its roof, then lets the first one inside back out once its time is up and
-// its exit is clear: out the bottom if it's the sorter's material, else onto the belt inside.
+// Takes in whatever lands on each sorter's roof (while it has room), and sets the first one
+// inside down on the belt in its passage once its time is up and there's room: past the
+// middle if it's the sorter's material, so it falls through the grate there, else before it.
 void ItemWorld::_run_sorters() {
 	for (Sorter &so : sorters) {
 		double mid = (so.x0 + so.x1) * 0.5;
-		for (size_t i = 0; i < items.size() && (int)so.inside.size() < SORTER_MAX_HELD;) {
+		for (size_t i = 0; i < items.size() && (int)so.inside.size() < SORTER_HOLDS;) {
 			const Body &it = items[i];
-			bool match = types[it.type].kind == so.filter;
-			bool over = it.x > so.x0 && it.x < so.x1;
-			bool on_roof = over && it.y > so.y0 - so.top_reach && it.y < so.y0 && (int)so.inside.size() < SORTER_HOLDS;
-			bool past_middle = so.out_vx >= 0.0 ? it.x >= mid : it.x <= mid;
-			bool in_passage = over && match && past_middle && it.y > so.pass_top && it.y < so.belt_y;
-			if (on_roof || in_passage) {
+			if (it.x > so.x0 && it.x < so.x1 && it.y > so.y0 - so.top_reach && it.y < so.y0) {
 				Sorter::Held held;
 				held.body = it;
 				held.release = tick + SORTER_TICKS;
-				held.match = match;
+				held.match = types[it.type].kind == so.filter;
 				so.inside.push_back(held);
 				double x = it.x, y = it.y;
 				items.erase(items.begin() + i);
@@ -659,22 +654,16 @@ void ItemWorld::_run_sorters() {
 		}
 		const Sorter::Held &next = so.inside.front();
 		double r = types[next.body.type].radius;
-		double x = mid, y, vx = 0.0, vy = 0.0;
-		if (next.match) {
-			y = so.y1 + r + 0.5;
-			vy = 40.0;
-		} else {
-			y = so.belt_y - r - 0.5;
-			vx = so.out_vx;
-		}
+		double ahead = so.out_vx >= 0.0 ? 1.0 : -1.0;
+		double x = mid + ahead * (next.match ? r * 0.5 : -r * 0.5);
+		double y = so.belt_y - r - 0.5;
 		if (_is_blocked_near(x, y, r * 2.0)) {
 			continue;
 		}
 		Body out;
 		_init_body(out, next.body.type, x, y, next.body.c, next.body.s);
 		out.temp = next.body.temp;
-		out.vx = vx;
-		out.vy = vy;
+		out.vx = so.out_vx;
 		items.push_back(out);
 		so.inside.erase(so.inside.begin());
 	}
@@ -943,7 +932,12 @@ void ItemWorld::_detect_wall(int ia, int si) {
 	}
 	double nx = was >= 0.0 ? sg.nx : -sg.nx;
 	double ny = was >= 0.0 ? sg.ny : -sg.ny;
-	for (int k = 0; k < ta.count; k++) {
+	// With its center past the line's end and behind it (tipping over the end of a belt, past
+	// the top of the belt's end wall), the back side means nothing: a corner dipping just past
+	// the line would be shoved back through to the center's side. The line's end poking into
+	// the item (below) and the next line of the same solid push it instead.
+	bool beside = was >= 0.0 || (along >= 0.0 && along <= sg.length);
+	for (int k = 0; k < ta.count && beside; k++) {
 		double px = a.world[k * 2], py = a.world[k * 2 + 1];
 		double u = ((px - sg.ax) * sg.dx + (py - sg.ay) * sg.dy) / sg.len_sq;
 		if (u < 0.0 || u > 1.0) {
