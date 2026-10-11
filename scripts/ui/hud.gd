@@ -10,7 +10,7 @@ signal demo_pressed
 ## Screen space the HUD covers above and below the world, for framing the camera.
 const TOP_MARGIN := 56.0
 const BOTTOM_MARGIN := 48.0
-const HELP := "Left click: place   Right click: remove   R: flip   1-6: pick part\nSpace: play/stop   Middle drag or WASD: pan   Wheel: zoom   Home: re-center"
+const HELP := "Left click: place   Right click: remove   R: turn   F: sorter filter   1-8: pick part\nSpace: play/stop   Middle drag or WASD: pan   Wheel: zoom   Home: re-center"
 
 var _part_buttons := {}  # StringName -> Button
 var _play_button: Button
@@ -94,7 +94,11 @@ func _ready() -> void:
 func set_selected(type: StringName) -> void:
 	if _part_buttons.has(type):
 		_part_buttons[type].button_pressed = true
-		_hint.text = PartDefs.DEFS[type]["hint"]
+
+
+func set_hint(text: String) -> void:
+	_hint.text = text
+	_hint.tooltip_text = text
 
 
 func set_running(running: bool) -> void:

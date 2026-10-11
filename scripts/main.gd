@@ -21,7 +21,10 @@ const MAX_TICKS_PER_FRAME := 4
 var machine := Machine.new()
 var sim: Simulation = null
 var selected: StringName = &"conveyor"
-var flipped := false
+## R turns the next part placed; each part wraps this to its own number of variants.
+var variant := 0
+## What the next sorter placed will drop.
+var sorter_filter: StringName = PartDefs.DEFAULT_FILTER
 var _accum := 0.0
 var _panning := false
 ## Mouse button being dragged to paint (place) or erase, or MOUSE_BUTTON_NONE.
@@ -83,7 +86,9 @@ func _handle_key(keycode: Key) -> void:
 	if keycode == KEY_SPACE:
 		_toggle_play()
 	elif keycode == KEY_R:
-		flipped = not flipped
+		variant += 1
+	elif keycode == KEY_F:
+		_cycle_filter()
 	elif keycode == KEY_HOME:
 		_frame_camera()
 	elif keycode >= KEY_1 and keycode < KEY_1 + PartDefs.ORDER.size():
@@ -114,7 +119,7 @@ func _paint(cell: Vector2i) -> void:
 		return
 	_last_paint_cell = cell
 	if _paint_button == MOUSE_BUTTON_LEFT:
-		machine.place(selected, cell, flipped)
+		machine.place(selected, cell, variant, sorter_filter)
 	elif _paint_button == MOUSE_BUTTON_RIGHT:
 		machine.remove_at(cell)
 
@@ -122,6 +127,32 @@ func _paint(cell: Vector2i) -> void:
 func _select(type: StringName) -> void:
 	selected = type
 	hud.set_selected(type)
+	_update_hint()
+
+
+## F on a placed sorter changes what it drops; anywhere else it changes what the next
+## sorter will drop.
+func _cycle_filter() -> void:
+	if sim:
+		return
+	var part := machine.part_at(_hover_cell())
+	if part != null and PartDefs.has_filter(part.type):
+		machine.set_filter(part, _next_filter(part.filter))
+	else:
+		sorter_filter = _next_filter(sorter_filter)
+	_update_hint()
+
+
+func _next_filter(current: StringName) -> StringName:
+	var index := ItemDefs.ORDER.find(current)
+	return ItemDefs.ORDER[(index + 1) % ItemDefs.ORDER.size()]
+
+
+func _update_hint() -> void:
+	var text: String = PartDefs.DEFS[selected]["hint"]
+	if PartDefs.has_filter(selected):
+		text = "Drops: %s.  %s" % [ItemDefs.DEFS[sorter_filter]["name"], text]
+	hud.set_hint(text)
 
 
 func _toggle_play() -> void:
@@ -137,12 +168,11 @@ func _toggle_play() -> void:
 
 func _update_ghost() -> void:
 	if sim or _panning:
-		view.ghost_type = &""
+		view.ghost = null
 		return
 	var cell := _hover_cell()
-	view.ghost_type = selected
-	view.ghost_cell = cell
-	view.ghost_flipped = flipped and PartDefs.is_flippable(selected)
+	var filter := sorter_filter if PartDefs.has_filter(selected) else &""
+	view.ghost = Part.new(selected, cell, variant % PartDefs.variant_count(selected), filter)
 	view.ghost_valid = machine.can_place(selected, cell)
 
 

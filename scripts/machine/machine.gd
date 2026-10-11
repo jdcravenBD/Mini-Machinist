@@ -21,15 +21,23 @@ func can_place(type: StringName, cell: Vector2i) -> bool:
 	return true
 
 
-func place(type: StringName, cell: Vector2i, flipped := false) -> Part:
+## `variant` wraps around the part's variant count, so one "turn" setting works for all.
+func place(type: StringName, cell: Vector2i, variant := 0, filter: StringName = &"") -> Part:
 	if not can_place(type, cell):
 		return null
-	var part := Part.new(type, cell, flipped and PartDefs.is_flippable(type))
+	if PartDefs.has_filter(type) and filter == &"":
+		filter = PartDefs.DEFAULT_FILTER
+	var part := Part.new(type, cell, variant % PartDefs.variant_count(type), filter if PartDefs.has_filter(type) else &"")
 	parts.append(part)
 	for c in part.cells():
 		_occupied[c] = part
 	changed.emit()
 	return part
+
+
+func set_filter(part: Part, filter: StringName) -> void:
+	part.filter = filter
+	changed.emit()
 
 
 func part_at(cell: Vector2i) -> Part:
@@ -66,8 +74,11 @@ func sorted_parts() -> Array[Part]:
 func to_dict() -> Dictionary:
 	var list := []
 	for p in sorted_parts():
-		list.append({"type": String(p.type), "x": p.cell.x, "y": p.cell.y, "flipped": p.flipped})
-	return {"version": 1, "parts": list}
+		var entry := {"type": String(p.type), "x": p.cell.x, "y": p.cell.y, "variant": p.variant}
+		if p.filter != &"":
+			entry["filter"] = String(p.filter)
+		list.append(entry)
+	return {"version": 2, "parts": list}
 
 
 func load_dict(data: Dictionary) -> void:
@@ -78,7 +89,12 @@ func load_dict(data: Dictionary) -> void:
 		if PartDefs.DEFS.has(type):
 			var cell := Vector2i(int(entry.get("x", 0)), int(entry.get("y", 0)))
 			if can_place(type, cell):
-				var part := Part.new(type, cell, bool(entry.get("flipped", false)))
+				# Version 1 saves stored a "flipped" flag instead of a variant number.
+				var variant := int(entry.get("variant", 1 if entry.get("flipped", false) else 0))
+				var filter := StringName(entry.get("filter", ""))
+				if PartDefs.has_filter(type) and not ItemDefs.DEFS.has(filter):
+					filter = PartDefs.DEFAULT_FILTER
+				var part := Part.new(type, cell, variant % PartDefs.variant_count(type), filter)
 				parts.append(part)
 				for c in part.cells():
 					_occupied[c] = part

@@ -10,6 +10,10 @@ const SURFACE_FRICTION := 0.6
 ## Ticks between spawns (60 ticks = 1 second).
 const SPAWN_INTERVAL := 30
 const HOPPER_GAP := 18.0
+const PANEL_THICKNESS := 6.0
+## Which tile edge a panel lies along, by variant (clockwise from the top), and the side
+## that edge faces.
+const PANEL_SIDES: Array[Vector2i] = [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
 const BIN_INSET := 2.0
 ## How far below the bin's rim an item must fall before it counts as collected.
 const BIN_CATCH_DEPTH := 10.0
@@ -31,7 +35,14 @@ static func build(machine: Machine) -> Simulation:
 				_add_box(sim, machine, p, 0.0)
 				sim.add_spawner(x0 + T * 0.5, y1, SPAWN_INTERVAL)
 			&"conveyor":
-				_add_box(sim, machine, p, -BELT_SPEED if p.flipped else BELT_SPEED)
+				_add_box(sim, machine, p, belt_speed(p))
+			&"sorter":
+				# A belt top that the filtered kind falls straight through, over an open chute.
+				_solid(sim, x0, y0, x1, y0, belt_speed(p), BELT_FRICTION, p.filter)
+				_solid(sim, x0, y1, x0, y0)
+				_solid(sim, x1, y0, x1, y1)
+			&"panel":
+				_add_panel(sim, machine, p)
 			&"ramp":
 				_add_ramp(sim, machine, p, x0, y0, x1, y1)
 			&"hopper":
@@ -49,6 +60,10 @@ static func build(machine: Machine) -> Simulation:
 	return sim
 
 
+static func belt_speed(p: Part) -> float:
+	return -BELT_SPEED if p.variant == 1 else BELT_SPEED
+
+
 ## True if the part at `cell` has a solid edge covering its whole `side`.
 ## Two parts touching along full edges skip that shared edge, so items glide across seams.
 static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> bool:
@@ -58,12 +73,62 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 	match part.type:
 		&"block", &"spawner", &"conveyor":
 			return true
+		&"sorter":
+			# Its belt and chute walls cover every side but the open bottom.
+			return side != Vector2i.DOWN
+		&"panel":
+			return side == PANEL_SIDES[part.variant]
 		&"ramp":
 			if side == Vector2i.DOWN:
 				return true
 			# Unflipped ramps slope down to the right, so their solid side is on the left.
-			return side == (Vector2i.RIGHT if part.flipped else Vector2i.LEFT)
+			return side == (Vector2i.RIGHT if part.variant == 1 else Vector2i.LEFT)
 	return false
+
+
+## The rectangle a panel fills inside its tile.
+static func panel_rect(p: Part) -> Rect2:
+	var origin := Vector2(p.cell * T)
+	match PANEL_SIDES[p.variant]:
+		Vector2i.UP:
+			return Rect2(origin, Vector2(T, PANEL_THICKNESS))
+		Vector2i.RIGHT:
+			return Rect2(origin + Vector2(T - PANEL_THICKNESS, 0), Vector2(PANEL_THICKNESS, T))
+		Vector2i.DOWN:
+			return Rect2(origin + Vector2(0, T - PANEL_THICKNESS), Vector2(T, PANEL_THICKNESS))
+	return Rect2(origin, Vector2(PANEL_THICKNESS, T))
+
+
+## A thin slab. Its short ends are left off where it continues into a matching panel or a
+## solid, so a row of panels makes one smooth floor and a wall meets a floor without a lip.
+static func _add_panel(sim: Simulation, machine: Machine, p: Part) -> void:
+	var r := panel_rect(p)
+	var x0 := r.position.x
+	var y0 := r.position.y
+	var x1 := r.end.x
+	var y1 := r.end.y
+	var side := PANEL_SIDES[p.variant]
+	if side == Vector2i.UP or side == Vector2i.DOWN:
+		_solid(sim, x0, y0, x1, y0)
+		_solid(sim, x1, y1, x0, y1)
+		if not _panel_continues(machine, p, Vector2i.LEFT):
+			_solid(sim, x0, y1, x0, y0)
+		if not _panel_continues(machine, p, Vector2i.RIGHT):
+			_solid(sim, x1, y0, x1, y1)
+	else:
+		_solid(sim, x1, y0, x1, y1)
+		_solid(sim, x0, y1, x0, y0)
+		if not _panel_continues(machine, p, Vector2i.UP):
+			_solid(sim, x0, y0, x1, y0)
+		if not _panel_continues(machine, p, Vector2i.DOWN):
+			_solid(sim, x1, y1, x0, y1)
+
+
+static func _panel_continues(machine: Machine, p: Part, direction: Vector2i) -> bool:
+	var next := machine.part_at(p.cell + direction)
+	if next != null and next.type == &"panel" and next.variant == p.variant:
+		return true
+	return has_full_edge(machine, p.cell + direction, -direction)
 
 
 ## A full-tile solid box. `top_speed` makes the top surface a belt.
@@ -85,8 +150,9 @@ static func _add_box(sim: Simulation, machine: Machine, p: Part, top_speed: floa
 
 
 static func _add_ramp(sim: Simulation, machine: Machine, p: Part, x0: float, y0: float, x1: float, y1: float) -> void:
-	sim.set_solid(p.cell, Simulation.Solid.RAMP_DOWN_LEFT if p.flipped else Simulation.Solid.RAMP_DOWN_RIGHT)
-	if p.flipped:
+	var flipped := p.variant == 1
+	sim.set_solid(p.cell, Simulation.Solid.RAMP_DOWN_LEFT if flipped else Simulation.Solid.RAMP_DOWN_RIGHT)
+	if flipped:
 		_solid(sim, x0, y1, x1, y0)
 		if not has_full_edge(machine, p.cell + Vector2i.RIGHT, Vector2i.LEFT):
 			_solid(sim, x1, y0, x1, y1)
@@ -98,5 +164,5 @@ static func _add_ramp(sim: Simulation, machine: Machine, p: Part, x0: float, y0:
 		_solid(sim, x1, y1, x0, y1)
 
 
-static func _solid(sim: Simulation, ax: float, ay: float, bx: float, by: float, speed := 0.0, friction := SURFACE_FRICTION) -> void:
-	sim.add_segment(Segment.new(ax, ay, bx, by, speed, friction))
+static func _solid(sim: Simulation, ax: float, ay: float, bx: float, by: float, speed := 0.0, friction := SURFACE_FRICTION, passes: StringName = &"") -> void:
+	sim.add_segment(Segment.new(ax, ay, bx, by, speed, friction, passes))

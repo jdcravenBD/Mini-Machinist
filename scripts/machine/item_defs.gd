@@ -4,6 +4,9 @@ class_name ItemDefs
 ##
 ## `size` scales the unit outline into pixels (a tile is 32).
 
+## Order used when cycling a sorter's filter.
+const ORDER: Array[StringName] = [&"iron_ore", &"rock"]
+
 const DEFS := {
 	&"iron_ore": {
 		"name": "Iron Ore",

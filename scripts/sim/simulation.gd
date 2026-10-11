@@ -73,6 +73,8 @@ class Bin:
 	var max_x: float
 	var max_y: float
 	var caught := 0
+	## Items caught, by kind.
+	var by_kind := {}
 
 	func _init(p_min_x: float, p_min_y: float, p_max_x: float, p_max_y: float) -> void:
 		min_x = p_min_x
@@ -389,6 +391,8 @@ func _detect_pair(ia: int, a: Item, ib: int, b: Item) -> void:
 ## poking into the item. The line pushes toward whichever side the item's center is on.
 func _detect_wall(ia: int, a: Item, si: int) -> void:
 	var sg := segments[si]
+	if sg.passes == a.kind:
+		return
 	var side := (a.x - sg.ax) * sg.nx + (a.y - sg.ay) * sg.ny
 	if absf(side) >= a.radius:
 		return
@@ -764,6 +768,8 @@ func _is_supported(index: int) -> bool:
 	if walls != null:
 		for si in walls:
 			var sg := segments[si]
+			if sg.passes == it.kind:
+				continue
 			var side := (it.x - sg.ax) * sg.nx + (it.y - sg.ay) * sg.ny
 			if absf(side) >= it.radius + SUPPORT_GAP:
 				continue
@@ -824,6 +830,7 @@ func _collect() -> void:
 		for b in bins:
 			if b.contains(it.x, it.y):
 				b.caught += 1
+				b.by_kind[it.kind] = b.by_kind.get(it.kind, 0) + 1
 				delivered[it.kind] = delivered.get(it.kind, 0) + 1
 				caught = true
 				break
@@ -844,16 +851,14 @@ func _collect() -> void:
 
 
 ## Joins touching horizontal or vertical segments that lie on the same line and behave the
-## same (speed, friction). Slanted ones are left alone. Output order is fixed by sorting.
+## same (speed, friction, what passes through). Slanted ones are left alone. Output order is fixed by sorting.
 static func _merge_runs(input: Array[Segment]) -> Array[Segment]:
 	var straight: Array[Segment] = []
 	var result: Array[Segment] = []
 	for sg in input:
 		# Point each straight segment toward +x or +y (flipping a belt flips its speed too).
-		if sg.ay == sg.by and sg.ax > sg.bx:
-			sg = Segment.new(sg.bx, sg.by, sg.ax, sg.ay, -sg.surface_speed, sg.friction)
-		elif sg.ax == sg.bx and sg.ay > sg.by:
-			sg = Segment.new(sg.bx, sg.by, sg.ax, sg.ay, -sg.surface_speed, sg.friction)
+		if (sg.ay == sg.by and sg.ax > sg.bx) or (sg.ax == sg.bx and sg.ay > sg.by):
+			sg = Segment.new(sg.bx, sg.by, sg.ax, sg.ay, -sg.surface_speed, sg.friction, sg.passes)
 		if sg.ay == sg.by or sg.ax == sg.bx:
 			straight.append(sg)
 		else:
@@ -883,9 +888,9 @@ static func _merge_runs(input: Array[Segment]) -> Array[Segment]:
 		if run != null and _continues(run, sg):
 			if sg.ay == sg.by:
 				if sg.bx > run.bx:
-					run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction)
+					run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction, run.passes)
 			elif sg.by > run.by:
-				run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction)
+				run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction, run.passes)
 			continue
 		if run != null:
 			result.append(run)
@@ -898,7 +903,7 @@ static func _merge_runs(input: Array[Segment]) -> Array[Segment]:
 ## True if `next` lies on the same line as `run`, behaves the same, and starts where `run`
 ## ends (or before).
 static func _continues(run: Segment, next: Segment) -> bool:
-	if run.surface_speed != next.surface_speed or run.friction != next.friction:
+	if run.surface_speed != next.surface_speed or run.friction != next.friction or run.passes != next.passes:
 		return false
 	if run.ay == run.by:
 		return next.ay == next.by and next.ay == run.ay and next.ax <= run.bx

@@ -16,10 +16,8 @@ const ITEM_OUTLINE := Color(0, 0, 0, 0.45)
 
 var machine: Machine
 var sim: Simulation
-## Placement preview; ghost_type is empty when there's nothing to preview.
-var ghost_type: StringName = &""
-var ghost_cell := Vector2i.ZERO
-var ghost_flipped := false
+## Placement preview, or null when there's nothing to preview.
+var ghost: Part = null
 var ghost_valid := true
 ## [kind, shape] -> drawing polygons ("body", "fleck", "outline") sized for that kind.
 var _item_polys := {}
@@ -38,15 +36,15 @@ func _draw() -> void:
 
 	if machine:
 		for p in machine.parts:
-			_draw_part(p.type, p.cell, p.flipped, Color.WHITE)
+			_draw_part(p, Color.WHITE)
 
 	if sim:
 		for it in sim.items:
 			_draw_item(it)
 		draw_set_transform_matrix(Transform2D.IDENTITY)
-	elif ghost_type != &"":
+	elif ghost != null:
 		var tint := Color(1, 1, 1, 0.55) if ghost_valid else Color(1, 0.35, 0.35, 0.55)
-		_draw_part(ghost_type, ghost_cell, ghost_flipped, tint)
+		_draw_part(ghost, tint)
 
 
 ## The item's real collision outline, with a lighter fleck so you can see it turn.
@@ -80,11 +78,12 @@ func _draw_grid(size: Vector2) -> void:
 		draw_line(Vector2(0, y * T), Vector2(size.x, y * T), GRID_LINE)
 
 
-func _draw_part(type: StringName, cell: Vector2i, flipped: bool, tint: Color) -> void:
-	var def: Dictionary = PartDefs.DEFS[type]
-	var rect := Rect2(Vector2(cell * T), Vector2(def["size"] * T))
+func _draw_part(p: Part, tint: Color) -> void:
+	var def: Dictionary = PartDefs.DEFS[p.type]
+	var rect := Rect2(Vector2(p.cell * T), Vector2(def["size"] * T))
 	var color: Color = def["color"] * tint
-	match type:
+	var flipped := p.variant == 1
+	match p.type:
 		&"block":
 			_draw_box(rect, color, tint)
 		&"spawner":
@@ -97,6 +96,12 @@ func _draw_part(type: StringName, cell: Vector2i, flipped: bool, tint: Color) ->
 			]), BELT_MARK * tint)
 		&"conveyor":
 			_draw_conveyor(rect, color, flipped, tint)
+		&"sorter":
+			_draw_sorter(rect, color, flipped, p.filter, tint)
+		&"panel":
+			var slab := PartGeometry.panel_rect(p)
+			draw_rect(slab, color)
+			draw_rect(slab, OUTLINE * tint, false, 1.0)
 		&"ramp":
 			var pts := PackedVector2Array([rect.position, rect.position + Vector2(0, T), rect.end])
 			if flipped:
@@ -133,17 +138,8 @@ func _draw_box(rect: Rect2, color: Color, tint: Color) -> void:
 
 func _draw_conveyor(rect: Rect2, color: Color, flipped: bool, tint: Color) -> void:
 	draw_rect(rect, color)
-	# Belt along the top, with marks that scroll in the travel direction while running.
-	var belt := Rect2(rect.position, Vector2(rect.size.x, 8))
-	draw_rect(belt, BELT * tint)
+	_draw_belt(rect, flipped, tint)
 	var dir := -1.0 if flipped else 1.0
-	var offset := 0.0
-	if sim:
-		offset = fposmod(sim.tick * PartGeometry.BELT_SPEED / Simulation.TICK_RATE * dir, 16.0)
-	for i in range(-1, 2):
-		var mx := rect.position.x + offset + i * 16.0 + 4.0
-		if mx >= rect.position.x and mx + 4.0 <= rect.end.x:
-			draw_rect(Rect2(Vector2(mx, rect.position.y + 3), Vector2(4, 2)), BELT_MARK * tint)
 	# Rollers and a direction arrow on the housing.
 	draw_circle(rect.position + Vector2(8, 22), 4.0, BELT * tint)
 	draw_circle(rect.position + Vector2(24, 22), 4.0, BELT * tint)
@@ -152,3 +148,40 @@ func _draw_conveyor(rect: Rect2, color: Color, flipped: bool, tint: Color) -> vo
 		c + Vector2(-3 * dir, -4), c + Vector2(3 * dir, 0), c + Vector2(-3 * dir, 4),
 	]), BELT_MARK * tint)
 	draw_rect(rect.grow(-1.0), OUTLINE * tint, false, 2.0)
+
+
+## Belt band along the top, with marks that scroll in the travel direction while running.
+func _draw_belt(rect: Rect2, flipped: bool, tint: Color) -> void:
+	draw_rect(Rect2(rect.position, Vector2(rect.size.x, 8)), BELT * tint)
+	var dir := -1.0 if flipped else 1.0
+	var offset := 0.0
+	if sim:
+		offset = fposmod(sim.tick * PartGeometry.BELT_SPEED / Simulation.TICK_RATE * dir, 16.0)
+	for i in range(-1, 2):
+		var mx := rect.position.x + offset + i * 16.0 + 4.0
+		if mx >= rect.position.x and mx + 4.0 <= rect.end.x:
+			draw_rect(Rect2(Vector2(mx, rect.position.y + 3), Vector2(4, 2)), BELT_MARK * tint)
+
+
+## A belt with a grate over an open chute, showing the item it drops.
+func _draw_sorter(rect: Rect2, color: Color, flipped: bool, filter: StringName, tint: Color) -> void:
+	var post := 5.0
+	draw_rect(Rect2(rect.position + Vector2(0, 8), Vector2(rect.size.x, rect.size.y - 8)), BELT * Color(1, 1, 1, 0.5) * tint)
+	draw_rect(Rect2(rect.position, Vector2(post, rect.size.y)), color)
+	draw_rect(Rect2(Vector2(rect.end.x - post, rect.position.y), Vector2(post, rect.size.y)), color)
+	_draw_belt(rect, flipped, tint)
+	# Grate slots across the belt.
+	for i in 4:
+		draw_rect(Rect2(rect.position + Vector2(5 + i * 6, 1), Vector2(3, 6)), Color(0, 0, 0, 0.55) * tint)
+	# What it drops, with an arrow pointing down through the chute.
+	if ItemDefs.DEFS.has(filter):
+		var icon := PackedVector2Array()
+		var outline := ItemDefs.outline(filter, 0)
+		var center := rect.position + Vector2(16, 17)
+		for i in outline.size() / 2:
+			icon.append(center + Vector2(outline[i * 2], outline[i * 2 + 1]) * 0.8)
+		draw_colored_polygon(icon, ItemDefs.DEFS[filter]["color"] * tint)
+		var arrow := rect.position + Vector2(16, 26)
+		draw_colored_polygon(PackedVector2Array([
+			arrow + Vector2(-4, -2), arrow + Vector2(4, -2), arrow + Vector2(0, 3),
+		]), BELT_MARK * tint)
