@@ -4,7 +4,9 @@ extends SceneTree
 
 
 func _init() -> void:
-	var ok := _sorter_splits() and _panel_basin_holds()
+	var ok := _sorter_splits()
+	ok = _sorters_in_a_row() and ok
+	ok = _panel_basin_holds() and ok
 	print("Parts: %s" % ("PASS" if ok else "FAIL"))
 	quit(0 if ok else 1)
 
@@ -35,6 +37,39 @@ func _sorter_splits() -> bool:
 	print("Sorter: under it %s, at the end %s, lost %d" % [under, end, sim.lost])
 	return under.get(&"iron_ore chunk", 0) == 0 and end.get(&"rock chunk", 0) == 0 \
 		and under.get(&"rock chunk", 0) > 5 and end.get(&"iron_ore chunk", 0) > 10 and sim.lost == 0
+
+
+## Three sorters back to back (rock, iron ore, slag): rock and ore drop out of the first two,
+## nothing snags at the seams, and nothing is left on the line once the spawner stops.
+func _sorters_in_a_row() -> bool:
+	var machine := Machine.new()
+	machine.place(&"spawner", Vector2i(5, 3))
+	for x in range(3, 10):
+		machine.place(&"conveyor", Vector2i(x, 6))
+	machine.place(&"sorter", Vector2i(10, 6), 0, &"rock")
+	machine.place(&"sorter", Vector2i(11, 6), 0, &"iron_ore")
+	machine.place(&"sorter", Vector2i(12, 6), 0, &"slag")
+	for x in range(13, 16):
+		machine.place(&"conveyor", Vector2i(x, 6))
+	machine.place(&"bin", Vector2i(10, 8))
+	machine.place(&"bin", Vector2i(12, 8))
+	machine.place(&"bin", Vector2i(16, 7))
+	var sim := PartGeometry.build(machine)
+	for i in 1800:
+		sim.step()
+	var mined := sim.spawned(0)
+	sim.clear_spawners()
+	for i in 600:
+		sim.step()
+	var dropped := {}
+	var past_the_end := {}
+	for b in sim.bin_count():
+		var counts := sim.bin_counts(b)
+		var into := past_the_end if sim.bin_rect(b).position.x > 15 * PartDefs.TILE else dropped
+		for key in counts:
+			into[key] = into.get(key, 0) + counts[key]
+	print("Sorters in a row: %d mined, dropped %s, past the end %s, %d still on the line, lost %d" % [mined, dropped, past_the_end, sim.item_count(), sim.lost])
+	return past_the_end.is_empty() and sim.item_count() == 0 and sim.lost == 0 		and dropped.get(&"rock chunk", 0) + dropped.get(&"iron_ore chunk", 0) == mined
 
 
 ## A basin made only of panels (floor plus two walls) should hold everything poured in.

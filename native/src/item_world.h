@@ -94,6 +94,24 @@ public:
 		std::vector<int> taken;
 	};
 
+	// A closed box on a belt line. Items that ride or drop into its mouth vanish inside; after a
+	// moment each comes out either the bottom (its material matches `filter`) or the far side
+	// onto the next belt, in the order they went in.
+	struct Sorter {
+		double min_x, min_y, max_x, max_y;
+		int filter;
+		// Far-side exit: an edge x (items come out beyond it), the belt's top y and speed.
+		double out_x, out_y, out_vx;
+		// Bottom exit: center x and the box's bottom y.
+		double drop_x, drop_y;
+		struct Held {
+			Body body;
+			int64_t release;
+			bool match;
+		};
+		std::vector<Held> inside;
+	};
+
 	struct Crusher {
 		int takes, makes, pieces, duration;
 		double min_x, min_y, max_x, max_y;
@@ -136,6 +154,7 @@ public:
 	int add_crusher(int p_takes, int p_makes, int p_pieces, int p_duration, double p_min_x, double p_min_y, double p_max_x, double p_max_y, double p_press_y, double p_exit_x, double p_exit_y);
 	int add_item(int p_type, double p_x, double p_y, double p_c, double p_s, double p_vx, double p_vy);
 	int add_intake(double p_min_x, double p_min_y, double p_max_x, double p_max_y);
+	int add_sorter(double p_min_x, double p_min_y, double p_max_x, double p_max_y, int p_filter, double p_out_x, double p_out_y, double p_out_vx, double p_drop_x, double p_drop_y);
 	void set_intake_open(int p_intake, bool p_open);
 	PackedInt32Array take_intake(int p_intake);
 	double raycast_down(double p_x, double p_from_y, double p_max_y) const;
@@ -187,6 +206,9 @@ private:
 	static constexpr double SUPPORT_SLOPE = 0.3;
 	static constexpr int PASS_TICKS = 6;
 	static constexpr double BELT_PRESS = 0.15;
+	// How many items a sorter holds at once, and how long each stays inside.
+	static constexpr int SORTER_HOLDS = 3;
+	static constexpr int SORTER_TICKS = 12;
 
 	// SOLID_TOP_HALF fills the top half of its tile (a conveyor).
 	enum Solid { SOLID_NONE = 0, SOLID_BOX = 1, SOLID_RAMP_DOWN_RIGHT = 2, SOLID_RAMP_DOWN_LEFT = 3, SOLID_TOP_HALF = 4 };
@@ -199,6 +221,7 @@ private:
 	std::vector<Bin> bins;
 	std::vector<Crusher> crushers;
 	std::vector<Intake> intakes;
+	std::vector<Sorter> sorters;
 	std::vector<bool> groups_off;
 
 	bool _segment_off(const Segment &s) const { return s.group >= 0 && s.group < (int)groups_off.size() && groups_off[s.group]; }
@@ -235,6 +258,7 @@ private:
 
 	void _run_spawners();
 	void _run_crushers();
+	void _run_sorters();
 	void _release_pieces(Crusher &cr);
 	bool _is_blocked_near(double p_x, double p_y, double p_reach) const;
 

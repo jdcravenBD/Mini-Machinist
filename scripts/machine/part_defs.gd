@@ -39,7 +39,7 @@ const DEFS := {
 		"size": Vector2i(1, 1),
 		"variants": 2,
 		"color": Color(0.33, 0.45, 0.58),
-		"hint": "A belt with a grate: items it's set to drop fall through, the rest ride across. R flips, F changes what it drops.",
+		"hint": "A closed box in a belt line: everything goes in its mouth, the material it's set to drop falls out the bottom, the rest comes out the far side. R flips, F changes what it drops.",
 	},
 	&"ramp": {
 		"name": "Ramp",

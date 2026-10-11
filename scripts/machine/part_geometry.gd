@@ -15,6 +15,11 @@ const HOPPER_GAP := 18.0
 const PANEL_THICKNESS := 6.0
 ## Conveyors are half a tile tall, with the belt on top.
 const CONVEYOR_HEIGHT := 16.0
+## A sorter is a conveyor-sized box with a hood rising this far above the belt line.
+const SORTER_HOOD := 6.0
+## How far in front of its mouth, and above its hood, a sorter takes items in.
+const SORTER_REACH := 10.0
+const SORTER_TOP_REACH := 18.0
 ## How far a crucible's walls sit inside its tile, and how far below the rim an item must
 ## fall before the crucible takes it.
 const CRUCIBLE_WALL := 2.0
@@ -69,10 +74,7 @@ static func build(machine: Machine) -> Simulation:
 			&"conveyor":
 				_add_conveyor(sim, machine, p)
 			&"sorter":
-				# A belt top that the filtered kind falls straight through, over an open chute.
-				sim.add_segment(Segment.new(x0, y0, x1, y0, belt_speed(p), BELT_FRICTION, p.filter, true))
-				_solid(sim, x0, y1, x0, y0)
-				_solid(sim, x1, y0, x1, y1)
+				_add_sorter(sim, p, x0, y0, x1)
 			&"panel":
 				_add_panel(sim, machine, p)
 			&"heating_coil", &"bellows", &"insulation", &"skimmer", &"tilter":
@@ -144,8 +146,8 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 			# Only its top: the belt runs the full width, but the body is half a tile tall.
 			return side == Vector2i.UP
 		&"sorter":
-			# Its belt and chute walls cover every side but the open bottom.
-			return side != Vector2i.DOWN
+			# Its hood covers its top; its sides only reach halfway down.
+			return side == Vector2i.UP
 		&"panel":
 			return side == PANEL_SIDES[part.variant]
 		&"ramp":
@@ -154,6 +156,24 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 			# Unflipped ramps slope down to the right, so their solid side is on the left.
 			return side == (Vector2i.RIGHT if part.variant == 1 else Vector2i.LEFT)
 	return false
+
+
+## A closed box in a belt line. Everything goes in through its mouth (the side the belt comes
+## from) or the top of its hood, out of sight; matches drop out the bottom, the rest come out
+## the far side onto the next belt. Being solid and seamless, a row of sorters can't snag.
+static func _add_sorter(sim: Simulation, p: Part, x0: float, y0: float, x1: float) -> void:
+	sim.set_solid(p.cell, Simulation.Solid.TOP_HALF)
+	var top := y0 - SORTER_HOOD
+	var bottom := y0 + CONVEYOR_HEIGHT
+	_solid(sim, x0, top, x1, top)
+	_solid(sim, x1, top, x1, bottom)
+	_solid(sim, x1, bottom, x0, bottom)
+	_solid(sim, x0, bottom, x0, top)
+	var speed := belt_speed(p)
+	var intake := Rect2(x0 - SORTER_REACH, top - SORTER_TOP_REACH, x1 - x0 + SORTER_REACH, bottom - top + SORTER_TOP_REACH)
+	if speed < 0.0:
+		intake.position.x = x0
+	sim.add_sorter(intake, p.filter, x1 if speed > 0.0 else x0, y0, speed, (x0 + x1) * 0.5, bottom)
 
 
 ## A half-tile box along the top of its tile with a belt surface. Its ends are left off where

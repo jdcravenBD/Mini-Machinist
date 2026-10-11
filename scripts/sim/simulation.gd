@@ -109,6 +109,14 @@ func new_wall_group() -> int:
 	return _wall_groups - 1
 
 
+## A sorter box: items whose centers enter `intake` go inside, then drop out at `drop` (the
+## box's bottom middle) if their material is `filter`, or come out past `out_x` on the belt
+## line `out_y` moving at `out_vx`.
+func add_sorter(intake: Rect2, filter: StringName, out_x: float, out_y: float, out_vx: float, drop_x: float, drop_y: float) -> void:
+	world.add_sorter(intake.position.x, intake.position.y, intake.end.x, intake.end.y,
+			ItemDefs.ORDER.find(filter), out_x, out_y, out_vx, drop_x, drop_y)
+
+
 ## An area that swallows items while open; returns its id for Smelter.
 func add_intake(area: Rect2) -> int:
 	return world.add_intake(area.position.x, area.position.y, area.end.x, area.end.y)

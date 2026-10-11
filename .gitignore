@@ -11,3 +11,6 @@ tests/_*
 
 # Native build output (the DLL itself lives in bin/ and is committed)
 native/build/
+
+# Copies of the physics DLL the Godot editor makes while it has it loaded
+bin/~*

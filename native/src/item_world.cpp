@@ -278,6 +278,22 @@ int ItemWorld::add_crusher(int p_takes, int p_makes, int p_pieces, int p_duratio
 	return (int)crushers.size() - 1;
 }
 
+int ItemWorld::add_sorter(double p_min_x, double p_min_y, double p_max_x, double p_max_y, int p_filter, double p_out_x, double p_out_y, double p_out_vx, double p_drop_x, double p_drop_y) {
+	Sorter so;
+	so.min_x = p_min_x;
+	so.min_y = p_min_y;
+	so.max_x = p_max_x;
+	so.max_y = p_max_y;
+	so.filter = p_filter;
+	so.out_x = p_out_x;
+	so.out_y = p_out_y;
+	so.out_vx = p_out_vx;
+	so.drop_x = p_drop_x;
+	so.drop_y = p_drop_y;
+	sorters.push_back(so);
+	return (int)sorters.size() - 1;
+}
+
 int ItemWorld::add_intake(double p_min_x, double p_min_y, double p_max_x, double p_max_y) {
 	Intake in;
 	in.min_x = p_min_x;
@@ -399,6 +415,7 @@ void ItemWorld::_turn(Body &b, double p_angle) {
 void ItemWorld::step() {
 	_run_spawners();
 	_run_crushers();
+	_run_sorters();
 	for (Body &it : items) {
 		it.prev_x = it.x;
 		it.prev_y = it.y;
@@ -473,6 +490,54 @@ void ItemWorld::_run_crushers() {
 				_release_pieces(cr);
 			}
 		}
+	}
+}
+
+// Takes in whatever reached each sorter's mouth (while it has room) and lets the first one
+// inside back out once its time is up and its exit is clear.
+void ItemWorld::_run_sorters() {
+	for (Sorter &so : sorters) {
+		for (size_t i = 0; i < items.size() && (int)so.inside.size() < SORTER_HOLDS;) {
+			const Body &it = items[i];
+			if (it.x > so.min_x && it.x < so.max_x && it.y > so.min_y && it.y < so.max_y) {
+				Sorter::Held held;
+				held.body = it;
+				held.release = tick + SORTER_TICKS;
+				held.match = types[it.type].kind == so.filter;
+				so.inside.push_back(held);
+				double x = it.x, y = it.y;
+				items.erase(items.begin() + i);
+				_wake_near(x, y);
+			} else {
+				i++;
+			}
+		}
+		if (so.inside.empty() || tick < so.inside.front().release) {
+			continue;
+		}
+		const Sorter::Held &next = so.inside.front();
+		double r = types[next.body.type].radius;
+		double x, y, vx, vy;
+		if (next.match) {
+			x = so.drop_x;
+			y = so.drop_y + r + 0.5;
+			vx = 0.0;
+			vy = 40.0;
+		} else {
+			x = so.out_x + (so.out_vx >= 0.0 ? r + 0.5 : -r - 0.5);
+			y = so.out_y - r - 0.5;
+			vx = so.out_vx;
+			vy = 0.0;
+		}
+		if (_is_blocked_near(x, y, r * 2.0)) {
+			continue;
+		}
+		Body out;
+		_init_body(out, next.body.type, x, y, next.body.c, next.body.s);
+		out.vx = vx;
+		out.vy = vy;
+		items.push_back(out);
+		so.inside.erase(so.inside.begin());
 	}
 }
 
@@ -1475,6 +1540,7 @@ void ItemWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_crusher", "takes", "makes", "pieces", "duration", "min_x", "min_y", "max_x", "max_y", "press_y", "exit_x", "exit_y"), &ItemWorld::add_crusher);
 	ClassDB::bind_method(D_METHOD("add_item", "type", "x", "y", "c", "s", "vx", "vy"), &ItemWorld::add_item);
 	ClassDB::bind_method(D_METHOD("add_intake", "min_x", "min_y", "max_x", "max_y"), &ItemWorld::add_intake);
+	ClassDB::bind_method(D_METHOD("add_sorter", "min_x", "min_y", "max_x", "max_y", "filter", "out_x", "out_y", "out_vx", "drop_x", "drop_y"), &ItemWorld::add_sorter);
 	ClassDB::bind_method(D_METHOD("set_intake_open", "intake", "open"), &ItemWorld::set_intake_open);
 	ClassDB::bind_method(D_METHOD("take_intake", "intake"), &ItemWorld::take_intake);
 	ClassDB::bind_method(D_METHOD("raycast_down", "x", "from_y", "max_y"), &ItemWorld::raycast_down);

@@ -148,15 +148,16 @@ func _draw_part(p: Part, tint: Color) -> void:
 			var belt := Rect2(rect.position, Vector2(T, PartGeometry.CONVEYOR_HEIGHT))
 			_draw_styled(belt, color, "<" if p.variant == 1 else ">", tint, 12)
 		&"sorter":
-			# The belt on top (with a dot showing what it drops), over an open chute between posts.
-			var belt := Rect2(rect.position, Vector2(T, PartGeometry.CONVEYOR_HEIGHT))
-			_draw_styled(belt, color, letter, tint, 12)
-			var post := Vector2(4, T - PartGeometry.CONVEYOR_HEIGHT)
-			_draw_styled(Rect2(rect.position + Vector2(0, PartGeometry.CONVEYOR_HEIGHT), post), color, "", tint)
-			_draw_styled(Rect2(rect.position + Vector2(T - 4, PartGeometry.CONVEYOR_HEIGHT), post), color, "", tint)
+			# A box with a hood above the belt line, a dark mouth on the side the belt comes
+			# from, and a dot showing what it drops.
+			var hood := PartGeometry.SORTER_HOOD
+			var box := Rect2(rect.position - Vector2(0, hood), Vector2(T, PartGeometry.CONVEYOR_HEIGHT + hood))
+			_draw_styled(box, color, letter, tint, 12)
+			var mouth_x := box.position.x + 2.0 if p.variant == 0 else box.end.x - 6.0
+			draw_rect(Rect2(Vector2(mouth_x, box.position.y + 2.0), Vector2(4, box.size.y - 4.0)), color.darkened(0.7) * tint)
 			if ItemDefs.DEFS.has(p.filter):
-				var dot := Rect2(rect.position + Vector2(T - 9, 4), Vector2(6, 6))
-				draw_rect(dot, ItemDefs.DEFS[p.filter]["color"] * tint)
+				var dot_x := box.end.x - 9.0 if p.variant == 0 else box.position.x + 3.0
+				draw_rect(Rect2(Vector2(dot_x, box.position.y + 3.0), Vector2(6, 6)), ItemDefs.DEFS[p.filter]["color"] * tint)
 		&"ramp":
 			var pts := PackedVector2Array([rect.position, rect.position + Vector2(0, T), rect.end])
 			if p.variant == 1:
