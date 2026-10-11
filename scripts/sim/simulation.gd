@@ -48,6 +48,11 @@ const WAKE_SPEED := 60.0
 ## direction), to count as holding an item up.
 const SUPPORT_GAP := 1.0
 const SUPPORT_SLOPE := 0.3
+## Ticks a crusher takes to pull an item smaller than it crushes through unchanged.
+const PASS_TICKS := 6
+## Share of its grip a belt keeps on an item that's being held back, so a backed-up queue
+## still presses forward (into a crusher, against a wall) without squashing together.
+const BELT_PRESS := 0.15
 ## Starting rotations for spawned items, as exact unit vectors (cos, sin).
 const SPAWN_ROTATIONS := [1.0, 0.0, 0.6, 0.8, -0.8, 0.6, 0.0, -1.0, 0.8, -0.6]
 
@@ -86,10 +91,10 @@ class Bin:
 		return px > min_x and px < max_x and py > min_y and py < max_y
 
 
-## Crushes one item at a time. An item of the size it takes that settles into its intake
-## (the gap between its rollers) is pulled in, held for `duration` ticks while it's crushed,
-## then comes out the bottom as `pieces` items of the next size down. Smaller items never
-## get caught; they fall through the gap on their own.
+## Crushes one item at a time. An item that settles into its intake (the dip between its
+## rollers) is pulled in. The size it `takes` is held for `duration` ticks while it's
+## crushed, then comes out the bottom as `pieces` items of the next size down. Anything
+## smaller is pulled straight through unchanged; anything bigger just sits there, clogging it.
 class Crusher:
 	var takes: StringName
 	var makes: StringName
@@ -105,6 +110,8 @@ class Crusher:
 	var held: Item = null
 	var held_x := 0.0
 	var held_y := 0.0
+	## True if the held item is smaller than what it crushes and will come out unchanged.
+	var passing := false
 	var timer := 0
 
 	func _init(p_takes: StringName, p_makes: StringName, p_pieces: int, p_duration: int) -> void:
@@ -113,9 +120,9 @@ class Crusher:
 		pieces = p_pieces
 		duration = p_duration
 
-	## 0 when it starts crushing, 1 when done.
+	## 0 when it starts crushing (or passing an item through), 1 when done.
 	func progress() -> float:
-		return 1.0 - float(timer) / duration
+		return 1.0 - float(timer) / (PASS_TICKS if passing else duration)
 
 
 ## Contacts found this substep. Item A is always awake and is pushed along the normal;
@@ -297,24 +304,37 @@ func _run_spawners() -> void:
 func _run_crushers() -> void:
 	for cr in crushers:
 		if cr.held == null:
+			var takes := ItemDefs.size_rank(cr.takes)
 			for it in items:
-				if it.size == cr.takes and it.x > cr.min_x and it.x < cr.max_x and it.y > cr.min_y and it.y < cr.max_y:
+				var rank := ItemDefs.size_rank(it.size)
+				if rank >= takes and it.x > cr.min_x and it.x < cr.max_x and it.y > cr.min_y and it.y < cr.max_y:
 					cr.held = it
 					cr.held_x = it.x
 					cr.held_y = it.y
-					cr.timer = cr.duration
+					cr.passing = rank > takes
+					cr.timer = PASS_TICKS if cr.passing else cr.duration
 					items.erase(it)
 					_wake_near(it.x, it.y)
 					break
 		elif cr.timer > 0:
 			cr.timer -= 1
-		elif not _is_blocked_near(cr.exit_x, cr.exit_y + ItemDefs.size_of(cr.held.kind, cr.makes) * 2.0, ItemDefs.size_of(cr.held.kind, cr.makes) * 3.0):
-			_release_pieces(cr)
+		else:
+			var out_size := cr.held.size if cr.passing else cr.makes
+			var piece_size := ItemDefs.size_of(cr.held.kind, out_size)
+			if not _is_blocked_near(cr.exit_x, cr.exit_y + piece_size * 2.0, piece_size * 3.0):
+				_release_pieces(cr)
 
 
-## The crushed item comes out as several smaller pieces in a fixed little spread.
+## The crushed item comes out as several smaller pieces in a fixed little spread (or, if it
+## was only passing through, as itself).
 func _release_pieces(cr: Crusher) -> void:
 	var held := cr.held
+	if cr.passing:
+		var out := Item.new(held.kind, cr.exit_x, cr.exit_y + held.radius + 0.5, held.shape, held.c, held.s, held.size)
+		out.vy = 40.0
+		items.append(out)
+		cr.held = null
+		return
 	var piece_size := ItemDefs.size_of(held.kind, cr.makes)
 	var rotations := SPAWN_ROTATIONS.size() / 2
 	for k in cr.pieces:
@@ -704,11 +724,12 @@ func _apply_friction(a: Item, b: Item, seg: Segment, lax: float, lay: float, lbx
 	var lam_t := minf(slide / weight, mu * lam)
 
 	if seg != null and seg.surface_speed != 0.0:
-		# A belt can't shove an item into whatever is holding it back (a wall, the item ahead
-		# in a queue); it slips under it instead. Otherwise a long queue gets squashed.
+		# A belt mostly slips under an item that something is holding back (a wall, the item
+		# ahead in a queue), keeping only BELT_PRESS of its grip. Full grip would squash a
+		# long queue together; none would leave a backed-up queue limp.
 		var held := (a.push_left if -tx > 0.0 else a.push_right) * absf(tx)
 		held += (a.push_up if -ty > 0.0 else a.push_down) * absf(ty)
-		lam_t = maxf(0.0, lam_t - held / a.inv_mass)
+		lam_t = maxf(lam_t * BELT_PRESS, lam_t - held / a.inv_mass)
 
 	_move(a, -tx * lam_t, -ty * lam_t, rax, ray)
 	if b != null:

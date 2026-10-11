@@ -76,7 +76,7 @@ func _draw_crushing(cr: Simulation.Crusher) -> void:
 	var gap_y := cr.max_y
 	var pos := Vector2(lerpf(cr.held_x, cr.exit_x, t), lerpf(cr.held_y, gap_y, t))
 	pos += Vector2(sin(sim.tick * 2.3), cos(sim.tick * 1.7)) * 0.8
-	var scale := lerpf(1.0, 0.45, t)
+	var scale := 1.0 if cr.passing else lerpf(1.0, 0.45, t)
 	var def: Dictionary = ItemDefs.DEFS[it.kind]
 	draw_set_transform_matrix(Transform2D(Vector2(it.c, it.s) * scale, Vector2(-it.s, it.c) * scale, pos))
 	draw_colored_polygon(_item_polys[key]["body"], def["color"])
@@ -122,12 +122,10 @@ func _draw_part(p: Part, tint: Color) -> void:
 		&"sorter":
 			_draw_sorter(rect, color, flipped, p.filter, tint)
 		&"large_crusher":
-			_draw_crusher_frame(rect, color, T * 0.5, tint)
 			var r := PartGeometry.LARGE_ROLLER
 			_draw_roller(rect.position + Vector2(T * 0.5, T * 0.5), r, 1.0, tint)
 			_draw_roller(rect.position + Vector2(T * 1.5, T * 0.5), r, -1.0, tint)
 		&"small_crusher":
-			_draw_crusher_frame(rect, color, T * 0.25, tint)
 			var r := PartGeometry.SMALL_ROLLER
 			for row in 2:
 				var cy := T * (0.25 + row * 0.5)
@@ -166,20 +164,13 @@ func _draw_part(p: Part, tint: Color) -> void:
 			]), color, 4.0)
 
 
-## Side walls down to the top rollers' middle (`wall_depth` below the top).
-func _draw_crusher_frame(rect: Rect2, color: Color, wall_depth: float, tint: Color) -> void:
-	draw_rect(rect, BELT * Color(1, 1, 1, 0.35) * tint)
-	draw_rect(Rect2(rect.position, Vector2(3, wall_depth)), color)
-	draw_rect(Rect2(Vector2(rect.end.x - 3, rect.position.y), Vector2(3, wall_depth)), color)
-
-
 ## A toothed roller, turning clockwise for `direction` 1 and counterclockwise for -1.
 func _draw_roller(center: Vector2, radius: float, direction: float, tint: Color) -> void:
 	var turn := 0.0
 	if sim:
 		turn = sim.tick / float(Simulation.TICK_RATE) * PartGeometry.ROLLER_SPEED / radius * direction
-	var teeth := 10 if radius > 8.0 else 6
-	var tooth := radius * 0.28
+	var teeth := 12 if radius > 10.0 else 8
+	var tooth := radius * 0.22
 	var body := PackedVector2Array()
 	for i in teeth * 2:
 		var a := turn + TAU * i / (teeth * 2)

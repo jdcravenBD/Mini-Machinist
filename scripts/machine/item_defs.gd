@@ -42,6 +42,11 @@ const SHAPES := [
 ]
 
 
+## 0 for the biggest size, counting up as pieces get smaller.
+static func size_rank(size: StringName) -> int:
+	return SIZES.keys().find(size)
+
+
 ## Scale in pixels of `kind` at `size`.
 static func size_of(kind: StringName, size: StringName) -> float:
 	return DEFS[kind]["size"] * SIZES[size]["scale"]

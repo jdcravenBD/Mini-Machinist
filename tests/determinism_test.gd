@@ -16,6 +16,10 @@ func _init() -> void:
 	crushing.place(&"large_crusher", Vector2i(10, 5))
 	crushing.place(&"ramp", Vector2i(11, 6), 1)
 	crushing.place(&"small_crusher", Vector2i(10, 7))
+	# Walls beside the small crusher keep bits from rolling off its outer rollers.
+	crushing.place(&"panel", Vector2i(11, 7), 3)
+	crushing.place(&"panel", Vector2i(9, 6), 1)
+	crushing.place(&"panel", Vector2i(9, 7), 1)
 	crushing.place(&"bin", Vector2i(10, 9))
 
 	var same := true

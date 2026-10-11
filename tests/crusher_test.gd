@@ -7,6 +7,7 @@ func _init() -> void:
 	var ok := _chain_makes_gravel()
 	ok = _bits_fall_through_large() and ok
 	ok = _chunk_clogs_small() and ok
+	ok = _belts_feed_directly() and ok
 	print("Crushers: %s" % ("PASS" if ok else "FAIL"))
 	quit(0 if ok else 1)
 
@@ -22,6 +23,10 @@ func _chain_makes_gravel() -> bool:
 	machine.place(&"large_crusher", Vector2i(10, 5))
 	machine.place(&"ramp", Vector2i(11, 6), 1)
 	machine.place(&"small_crusher", Vector2i(10, 7))
+	# Walls beside the small crusher keep bits from rolling off its outer rollers.
+	machine.place(&"panel", Vector2i(11, 7), 3)
+	machine.place(&"panel", Vector2i(9, 6), 1)
+	machine.place(&"panel", Vector2i(9, 7), 1)
 	machine.place(&"bin", Vector2i(10, 9))
 	var sim := PartGeometry.build(machine)
 	for i in 3600:
@@ -68,3 +73,40 @@ func _chunk_clogs_small() -> bool:
 	var stuck := sim.items.has(chunk) and chunk.y < 5 * PartDefs.TILE + 4 and sim.crushers[0].held == null
 	print("Chunk on small crusher: still on top %s (y %.1f)" % [stuck, chunk.y])
 	return stuck
+
+
+## A belt in the same row feeding straight into each crusher, no hopper: nothing gets stuck
+## at the edge, and everything comes out crushed.
+func _belts_feed_directly() -> bool:
+	var machine := Machine.new()
+	machine.place(&"spawner", Vector2i(5, 3))
+	for x in range(3, 10):
+		machine.place(&"conveyor", Vector2i(x, 6))
+	machine.place(&"large_crusher", Vector2i(10, 6))
+	machine.place(&"bin", Vector2i(10, 8))
+	for x in range(3, 10):
+		machine.place(&"conveyor", Vector2i(x, 14))
+	machine.place(&"small_crusher", Vector2i(10, 14))
+	machine.place(&"bin", Vector2i(9, 16))
+	machine.place(&"panel", Vector2i(11, 16), 3)
+	var sim := PartGeometry.build(machine)
+	for k in 20:
+		sim.items.append(Item.new(&"rock" if k % 3 == 2 else &"iron_ore", 110.0 + k * 9.0, 440.0, k % 4, 1.0, 0.0, &"bit"))
+	for i in 2400:
+		sim.step()
+	var bits := 0
+	var gravel := 0
+	var on_belts := 0
+	for b in sim.bins:
+		for key in b.by_kind:
+			if String(key).ends_with(" bit"):
+				bits += b.by_kind[key]
+			elif String(key).ends_with(" gravel"):
+				gravel += b.by_kind[key]
+	for it in sim.items:
+		if it.size != &"chunk" or it.x > 300:
+			on_belts += 1
+	var mined: int = sim.spawners[0].count
+	print("Direct feed: %d chunks mined -> %d bits; 20 bits -> %d gravel; lost %d; %d pieces left past the belts" % [mined, bits, gravel, sim.lost, on_belts])
+	# The last few chunks mined are still riding the belt when the test ends.
+	return sim.lost == 0 and gravel == 60 and bits >= (mined - 10) * 3
