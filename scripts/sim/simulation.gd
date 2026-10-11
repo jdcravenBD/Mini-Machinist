@@ -10,6 +10,12 @@ extends RefCounted
 ## the same way in every simulation (see type_id) so drawing can batch by it.
 
 const TICK_RATE := 60
+## Heat a coil adds to each cell of itself per tick, and how much each pumping bellows touching
+## it multiplies that by (on top of 1).
+const COIL_POWER := 6.5
+const BELLOWS_BOOST := 1.0
+## What heat cells are made of (matches ItemWorld's materials).
+enum HeatMaterial { AIR, METAL, INSULATION }
 
 ## Solid tile kinds, for pushing out items that a heavy pile squeezed into a solid.
 ## TOP_HALF fills only the top half of its tile (a conveyor).
@@ -32,6 +38,9 @@ var delivered: Dictionary:
 		for kind_index in raw:
 			result[ItemDefs.ORDER[kind_index]] = raw[kind_index]
 		return result
+
+## Heating coils: [heater id in the world, number of bellows touching the coil].
+var heaters: Array = []
 
 ## Crucibles and the smelting parts touching them, run after the physics each tick.
 var smelters: Array[Smelter] = []
@@ -103,6 +112,38 @@ func add_crusher(takes: StringName, makes: StringName, pieces: int, duration: in
 			intake.position.x, intake.position.y, intake.end.x, intake.end.y, press_y, exit_x, exit_y)
 
 
+## Fills the heat cells a part covers with its material.
+func fill_heat(origin: Vector2, shapes: Dictionary, material: HeatMaterial) -> void:
+	for r in shapes["rects"]:
+		var rect: Rect2 = r
+		world.heat_fill_rect(origin.x + rect.position.x, origin.y + rect.position.y, origin.x + rect.end.x, origin.y + rect.end.y, material)
+	for polygon in shapes["polygons"]:
+		world.heat_fill_polygon(_flat(polygon, origin), material)
+	for circle in shapes["circles"]:
+		var ring := PackedVector2Array()
+		for i in 12:
+			ring.append(circle[0] + Vector2(PartGeometry.CIRCLE_12[i * 2], PartGeometry.CIRCLE_12[i * 2 + 1]) * circle[1])
+		world.heat_fill_polygon(_flat(ring, origin), material)
+
+
+## A heating coil over `area`, with `bellows` bellows touching it.
+func add_heater(area: Rect2, bellows: int) -> void:
+	heaters.append([world.add_heater(area.position.x, area.position.y, area.end.x, area.end.y), bellows])
+
+
+## The temperature at a point in the world.
+func heat_at(point: Vector2) -> float:
+	return world.heat_at(point.x, point.y)
+
+
+static func _flat(points: PackedVector2Array, origin: Vector2) -> PackedFloat64Array:
+	var flat := PackedFloat64Array()
+	for point in points:
+		flat.append(origin.x + point.x)
+		flat.append(origin.y + point.y)
+	return flat
+
+
 ## A new id for a group of walls that can be switched off together.
 func new_wall_group() -> int:
 	_wall_groups += 1
@@ -134,6 +175,10 @@ func finish_build() -> void:
 # --- Running and reading ---------------------------------------------------------------
 
 func step() -> void:
+	var pumping := Smelter.is_pumping(tick)
+	for heater in heaters:
+		var boost: float = 1.0 + (BELLOWS_BOOST * heater[1] if pumping else 0.0)
+		world.set_heater_power(heater[0], COIL_POWER * boost)
 	world.step()
 	for smelter in smelters:
 		smelter.step(self)
@@ -213,6 +258,7 @@ func copy_items_from(other: Simulation) -> void:
 	world.copy_items_from(other.world)
 
 
-## Per item type id, the transforms of every item of that type, ready for a MultiMesh.
+## Per item type id, the transform and color of every item of that type, ready for a
+## MultiMesh (12 floats each).
 func draw_buffers() -> Array:
 	return world.draw_buffers(type_count())

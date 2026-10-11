@@ -118,62 +118,44 @@ static func _make_part(p: Part) -> Dictionary:
 	var art := _Art.new(int(size.x), int(size.y), Vector2.ZERO)
 	art.color = def["color"]
 	art.letter = def["letter"]
+	if p.type == &"large_crusher" or p.type == &"small_crusher":
+		# Drawn as rotating rollers instead (see roller()).
+		return {"texture": null, "offset": Vector2.ZERO}
+	var shapes := PartShapes.of(p)
+	art.rects = shapes["rects"]
+	art.polygons = shapes["polygons"]
+	art.circles = shapes["circles"]
 	match p.type:
 		&"conveyor":
 			art.resize(T, int(PartGeometry.CONVEYOR_HEIGHT), Vector2.ZERO)
-			art.rects.append(Rect2(0, 0, T, PartGeometry.CONVEYOR_HEIGHT))
 			art.letter = "<" if p.variant == 1 else ">"
 			art.letter_scale = 1
 		&"sorter":
-			# A box with a hood above the belt line, a dark mouth on the side the belt comes
-			# from, and a dot showing what it drops.
+			# A dark mouth on the side the belt comes from, and a dot showing what it drops.
 			var hood := PartGeometry.SORTER_HOOD
 			var height := PartGeometry.CONVEYOR_HEIGHT + hood
 			art.resize(T, int(height), Vector2(0, -hood))
-			art.rects.append(Rect2(0, 0, T, height))
 			art.letter_scale = 1
 			var mouth_x := 3 if p.variant == 0 else T - 6
-			art.patches.append([Rect2(mouth_x, 3, 3, height - 6), art.color.darkened(0.7)])
+			art.patches.append([Rect2(mouth_x, 3 - hood, 3, height - 6), art.color.darkened(0.7)])
 			if ItemDefs.DEFS.has(p.filter):
 				var dot_x := T - 9 if p.variant == 0 else 5
-				art.patches.append([Rect2(dot_x, 4, 4, 4), ItemDefs.DEFS[p.filter]["color"]])
+				art.patches.append([Rect2(dot_x, 4 - hood, 4, 4), ItemDefs.DEFS[p.filter]["color"]])
 		&"ramp":
-			if p.variant == 1:
-				art.polygons.append(PackedVector2Array([Vector2(T, 0), Vector2(T, T), Vector2(0, T)]))
-				art.letter_at = Vector2(T * 0.68, T * 0.7)
-			else:
-				art.polygons.append(PackedVector2Array([Vector2(0, 0), Vector2(0, T), Vector2(T, T)]))
-				art.letter_at = Vector2(T * 0.32, T * 0.7)
+			art.letter_at = Vector2(T * 0.68, T * 0.7) if p.variant == 1 else Vector2(T * 0.32, T * 0.7)
 			art.letter_scale = 1
 		&"hopper":
-			var mid := size.x * 0.5
-			var gap := PartGeometry.HOPPER_GAP * 0.5
-			var wall := 5.0
-			art.polygons.append(PackedVector2Array([Vector2(0, 0), Vector2(wall, 0), Vector2(mid - gap, T), Vector2(mid - gap - wall, T)]))
-			art.polygons.append(PackedVector2Array([Vector2(size.x - wall, 0), Vector2(size.x, 0), Vector2(mid + gap + wall, T), Vector2(mid + gap, T)]))
 			art.stroke = 1.0
-			art.letter_at = Vector2(mid, 9)
+			art.letter_at = Vector2(size.x * 0.5, 9)
 			art.letter_scale = 1
 			art.letter_on_background = true
 		&"panel":
-			var slab := PartGeometry.panel_rect(p)
-			art.rects.append(Rect2(slab.position - Vector2(p.cell * T), slab.size))
 			art.stroke = 1.0
 			art.letter = ""
 		&"bin":
-			var inset := PartGeometry.BIN_INSET
-			var wall := 4.0
-			art.rects.append(Rect2(inset - wall * 0.5, 0, wall, T))
-			art.rects.append(Rect2(size.x - inset - wall * 0.5, 0, wall, T))
-			art.rects.append(Rect2(inset - wall * 0.5, T - wall, size.x - inset * 2.0 + wall, wall))
 			art.stroke = 1.0
 			art.letter_at = Vector2(size.x * 0.5, T * 0.45)
 			art.letter_on_background = true
-		&"large_crusher", &"small_crusher":
-			# Drawn as rotating rollers instead (see roller()).
-			return {"texture": null, "offset": Vector2.ZERO}
-		_:
-			art.rects.append(Rect2(Vector2.ZERO, size))
 	return art.render()
 
 

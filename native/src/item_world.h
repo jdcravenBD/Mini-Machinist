@@ -15,6 +15,7 @@
 #include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/array.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_float64_array.hpp>
@@ -59,6 +60,8 @@ public:
 		double step_x = 0.0, step_y = 0.0, step_c = 1.0, step_s = 0.0;
 		double prev_x = 0.0, prev_y = 0.0, prev_c = 1.0, prev_s = 0.0;
 		double push_right = 0.0, push_left = 0.0, push_down = 0.0, push_up = 0.0;
+		// Degrees Celsius; taken on from whatever the item touches.
+		double temp = 20.0;
 	};
 
 	struct Segment {
@@ -158,6 +161,16 @@ public:
 	void set_intake_open(int p_intake, bool p_open);
 	PackedInt32Array take_intake(int p_intake);
 	double raycast_down(double p_x, double p_from_y, double p_max_y) const;
+
+	// Heat.
+	void heat_fill_rect(double p_x0, double p_y0, double p_x1, double p_y1, int p_material);
+	void heat_fill_polygon(const PackedFloat64Array &p_points, int p_material);
+	int add_heater(double p_x0, double p_y0, double p_x1, double p_y1);
+	void set_heater_power(int p_heater, double p_power);
+	double heat_at(double p_x, double p_y) const;
+	PackedByteArray heat_image() const;
+	int heat_columns() const { return heat_cols; }
+	int heat_rows_count() const { return heat_rows; }
 	double type_radius(int p_type) const;
 
 	// Running.
@@ -210,6 +223,24 @@ private:
 	static constexpr int SORTER_HOLDS = 3;
 	static constexpr int SORTER_TICKS = 12;
 
+	// Heat: a grid of HEAT_CELL-pixel cells, each made of a material that sets how well it
+	// passes heat to its neighbours. Air also slowly cools back toward room temperature.
+	static constexpr double HEAT_CELL = 4.0;
+	static constexpr double AMBIENT = 20.0;
+	enum HeatMaterial { HEAT_AIR = 0, HEAT_METAL = 1, HEAT_INSULATION = 2 };
+	// Share of the temperature difference that crosses between two touching cells per tick
+	// (the smaller of the two materials' values is used). Metal: 4 neighbours x 0.2 keeps
+	// the update stable.
+	static constexpr double CONDUCT[3] = { 0.02, 0.2, 0.004 };
+	static constexpr double AIR_COOLING = 0.003;
+	static constexpr double MAX_TEMP = 3000.0;
+	// Items take on the temperature of what they touch: this share of the gap per tick
+	// touching something solid (doubling for each size down), or AIR_HEATING in open air.
+	static constexpr double CONTACT_HEATING = 0.02;
+	static constexpr double AIR_HEATING = 0.003;
+	// Below this, nothing glows.
+	static constexpr double GLOW_START = 450.0;
+
 	// SOLID_TOP_HALF fills the top half of its tile (a conveyor).
 	enum Solid { SOLID_NONE = 0, SOLID_BOX = 1, SOLID_RAMP_DOWN_RIGHT = 2, SOLID_RAMP_DOWN_LEFT = 3, SOLID_TOP_HALF = 4 };
 
@@ -222,6 +253,15 @@ private:
 	std::vector<Crusher> crushers;
 	std::vector<Intake> intakes;
 	std::vector<Sorter> sorters;
+
+	struct Heater {
+		std::vector<int> cells;
+		double power = 0.0;
+	};
+	int heat_cols = 0, heat_rows = 0;
+	std::vector<double> heat, heat_next;
+	std::vector<uint8_t> heat_mat;
+	std::vector<Heater> heaters;
 	std::vector<bool> groups_off;
 
 	bool _segment_off(const Segment &s) const { return s.group >= 0 && s.group < (int)groups_off.size() && groups_off[s.group]; }
@@ -292,6 +332,12 @@ private:
 	bool _is_supported(int index);
 	void _collect();
 	void _wake_near(double x, double y);
+
+	void _step_heat();
+	void _heat_items();
+	int _heat_cell(double p_x, double p_y) const;
+	template <typename Inside>
+	void _fill_heat(double p_x0, double p_y0, double p_x1, double p_y1, int p_material, Inside p_inside);
 };
 
 } // namespace godot

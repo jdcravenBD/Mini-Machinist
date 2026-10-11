@@ -126,6 +126,7 @@ static func build(machine: Machine) -> Simulation:
 	for p in machine.sorted_parts():
 		if p.type == &"crucible":
 			_add_smelter(sim, machine, p, _crucible_groups[p.cell])
+	_add_heat(sim, machine)
 	return sim
 
 
@@ -232,6 +233,22 @@ static func _add_smelter(sim: Simulation, machine: Machine, crucible: Part, wall
 				if side.x != 0:
 					smelter.pour_dir = -side.x
 	sim.add_smelter(crucible.cell, smelter)
+
+
+## Fills the heat map with every part's material (insulation, or metal for everything else),
+## then sets up the heating coils, each boosted by the bellows touching it.
+static func _add_heat(sim: Simulation, machine: Machine) -> void:
+	for p in machine.sorted_parts():
+		var material := Simulation.HeatMaterial.INSULATION if p.type == &"insulation" else Simulation.HeatMaterial.METAL
+		sim.fill_heat(Vector2(p.cell * T), PartShapes.of(p), material)
+	for p in machine.sorted_parts():
+		if p.type != &"heating_coil":
+			continue
+		var bellows := 0
+		for touching in _touching_parts(machine, p):
+			if touching[0].type == &"bellows":
+				bellows += 1
+		sim.add_heater(Rect2(Vector2(p.cell * T), Vector2(T, T)), bellows)
 
 
 ## Every part sharing an edge with `part`, each once, as [neighbor, side it's on].

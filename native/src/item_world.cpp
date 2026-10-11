@@ -144,6 +144,11 @@ void ItemWorld::set_bounds(int p_cols, int p_rows) {
 	grid_cols = (int)std::ceil((cols * SEG_CELL + GRID_MARGIN * 2.0) / ITEM_CELL);
 	grid_rows = (int)std::ceil((rows * SEG_CELL + GRID_MARGIN * 2.0) / ITEM_CELL);
 	cell_head.assign((size_t)grid_cols * grid_rows, -1);
+	heat_cols = (int)(cols * SEG_CELL / HEAT_CELL);
+	heat_rows = (int)(rows * SEG_CELL / HEAT_CELL);
+	heat.assign((size_t)heat_cols * heat_rows, AMBIENT);
+	heat_next.assign(heat.size(), AMBIENT);
+	heat_mat.assign(heat.size(), HEAT_AIR);
 	seg_cols = cols + SEG_MARGIN * 2;
 	seg_rows = rows + SEG_MARGIN * 2;
 	seg_grid.assign((size_t)seg_cols * seg_rows, std::vector<int>());
@@ -362,6 +367,207 @@ double ItemWorld::raycast_down(double p_x, double p_from_y, double p_max_y) cons
 	return best;
 }
 
+// --- Heat ----------------------------------------------------------------------------
+
+namespace {
+
+// How a hot solid looks: dark red, through orange and yellow, to near white. RGBA.
+constexpr double GLOW_STOPS[][5] = {
+	{ 450.0, 0.50, 0.00, 0.00, 0.00 },
+	{ 700.0, 0.75, 0.05, 0.00, 0.45 },
+	{ 1000.0, 1.00, 0.25, 0.00, 0.60 },
+	{ 1300.0, 1.00, 0.55, 0.05, 0.70 },
+	{ 1600.0, 1.00, 0.85, 0.30, 0.80 },
+	{ 2000.0, 1.00, 1.00, 0.75, 0.85 },
+};
+
+void glow_color(double t, double out[4]) {
+	constexpr int count = sizeof(GLOW_STOPS) / sizeof(GLOW_STOPS[0]);
+	if (t <= GLOW_STOPS[0][0]) {
+		out[0] = out[1] = out[2] = out[3] = 0.0;
+		return;
+	}
+	for (int i = 1; i < count; i++) {
+		if (t <= GLOW_STOPS[i][0]) {
+			double f = (t - GLOW_STOPS[i - 1][0]) / (GLOW_STOPS[i][0] - GLOW_STOPS[i - 1][0]);
+			for (int c = 0; c < 4; c++) {
+				out[c] = GLOW_STOPS[i - 1][c + 1] + (GLOW_STOPS[i][c + 1] - GLOW_STOPS[i - 1][c + 1]) * f;
+			}
+			return;
+		}
+	}
+	for (int c = 0; c < 4; c++) {
+		out[c] = GLOW_STOPS[count - 1][c + 1];
+	}
+}
+
+bool point_in_polygon(double x, double y, const PackedFloat64Array &pts) {
+	int n = (int)pts.size() / 2;
+	bool inside = false;
+	for (int i = 0, j = n - 1; i < n; j = i++) {
+		double xi = pts[i * 2], yi = pts[i * 2 + 1];
+		double xj = pts[j * 2], yj = pts[j * 2 + 1];
+		if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+			inside = !inside;
+		}
+	}
+	return inside;
+}
+
+} // namespace
+
+template <typename Inside>
+void ItemWorld::_fill_heat(double p_x0, double p_y0, double p_x1, double p_y1, int p_material, Inside p_inside) {
+	int cx0 = std::max(0, floor_div(p_x0, HEAT_CELL));
+	int cx1 = std::min(heat_cols - 1, floor_div(p_x1, HEAT_CELL));
+	int cy0 = std::max(0, floor_div(p_y0, HEAT_CELL));
+	int cy1 = std::min(heat_rows - 1, floor_div(p_y1, HEAT_CELL));
+	for (int cy = cy0; cy <= cy1; cy++) {
+		for (int cx = cx0; cx <= cx1; cx++) {
+			if (p_inside((cx + 0.5) * HEAT_CELL, (cy + 0.5) * HEAT_CELL)) {
+				heat_mat[(size_t)cy * heat_cols + cx] = (uint8_t)p_material;
+			}
+		}
+	}
+}
+
+// Marks the heat cells whose centers lie in the rectangle as `p_material`.
+void ItemWorld::heat_fill_rect(double p_x0, double p_y0, double p_x1, double p_y1, int p_material) {
+	_fill_heat(p_x0, p_y0, p_x1, p_y1, p_material, [&](double x, double y) {
+		return x >= p_x0 && x < p_x1 && y >= p_y0 && y < p_y1;
+	});
+}
+
+// Same for a polygon given as flat x, y pairs.
+void ItemWorld::heat_fill_polygon(const PackedFloat64Array &p_points, int p_material) {
+	double x0 = std::numeric_limits<double>::infinity(), y0 = x0;
+	double x1 = -x0, y1 = -x0;
+	for (int i = 0; i + 1 < p_points.size(); i += 2) {
+		x0 = std::min(x0, p_points[i]);
+		x1 = std::max(x1, p_points[i]);
+		y0 = std::min(y0, p_points[i + 1]);
+		y1 = std::max(y1, p_points[i + 1]);
+	}
+	_fill_heat(x0, y0, x1, y1, p_material, [&](double x, double y) {
+		return point_in_polygon(x, y, p_points);
+	});
+}
+
+// A heating coil: the solid cells in the rectangle each gain its power in degrees per tick.
+int ItemWorld::add_heater(double p_x0, double p_y0, double p_x1, double p_y1) {
+	Heater h;
+	for (int cy = std::max(0, floor_div(p_y0, HEAT_CELL)); cy <= std::min(heat_rows - 1, floor_div(p_y1, HEAT_CELL)); cy++) {
+		for (int cx = std::max(0, floor_div(p_x0, HEAT_CELL)); cx <= std::min(heat_cols - 1, floor_div(p_x1, HEAT_CELL)); cx++) {
+			double x = (cx + 0.5) * HEAT_CELL, y = (cy + 0.5) * HEAT_CELL;
+			int i = cy * heat_cols + cx;
+			if (x >= p_x0 && x < p_x1 && y >= p_y0 && y < p_y1 && heat_mat[i] != HEAT_AIR) {
+				h.cells.push_back(i);
+			}
+		}
+	}
+	heaters.push_back(h);
+	return (int)heaters.size() - 1;
+}
+
+void ItemWorld::set_heater_power(int p_heater, double p_power) {
+	if (p_heater >= 0 && p_heater < (int)heaters.size()) {
+		heaters[p_heater].power = p_power;
+	}
+}
+
+int ItemWorld::_heat_cell(double p_x, double p_y) const {
+	int cx = floor_div(p_x, HEAT_CELL);
+	int cy = floor_div(p_y, HEAT_CELL);
+	if (cx < 0 || cy < 0 || cx >= heat_cols || cy >= heat_rows) {
+		return -1;
+	}
+	return cy * heat_cols + cx;
+}
+
+double ItemWorld::heat_at(double p_x, double p_y) const {
+	int i = _heat_cell(p_x, p_y);
+	return i < 0 ? AMBIENT : heat[i];
+}
+
+// Heaters add their power, then heat flows between touching cells (each cell's new value is
+// worked out from the old values only, so the order cells are visited doesn't matter), the
+// world's edge counts as room-temperature air, and air slowly cools.
+void ItemWorld::_step_heat() {
+	if (heat.empty()) {
+		return;
+	}
+	for (const Heater &h : heaters) {
+		for (int i : h.cells) {
+			heat[i] += h.power;
+		}
+	}
+	const double edge = CONDUCT[HEAT_AIR];
+	for (int cy = 0; cy < heat_rows; cy++) {
+		for (int cx = 0; cx < heat_cols; cx++) {
+			int i = cy * heat_cols + cx;
+			double t = heat[i];
+			double k = CONDUCT[heat_mat[i]];
+			double flow = 0.0;
+			flow += cx > 0 ? std::min(k, CONDUCT[heat_mat[i - 1]]) * (heat[i - 1] - t) : std::min(k, edge) * (AMBIENT - t);
+			flow += cx < heat_cols - 1 ? std::min(k, CONDUCT[heat_mat[i + 1]]) * (heat[i + 1] - t) : std::min(k, edge) * (AMBIENT - t);
+			flow += cy > 0 ? std::min(k, CONDUCT[heat_mat[i - heat_cols]]) * (heat[i - heat_cols] - t) : std::min(k, edge) * (AMBIENT - t);
+			flow += cy < heat_rows - 1 ? std::min(k, CONDUCT[heat_mat[i + heat_cols]]) * (heat[i + heat_cols] - t) : std::min(k, edge) * (AMBIENT - t);
+			double next = t + flow;
+			if (heat_mat[i] == HEAT_AIR) {
+				next += (AMBIENT - next) * AIR_COOLING;
+			}
+			heat_next[i] = std::min(next, MAX_TEMP);
+		}
+	}
+	heat.swap(heat_next);
+}
+
+// Each item moves toward the temperature of the hottest solid its corners touch, or of the
+// air around it if it touches nothing solid. Smaller pieces change temperature faster.
+void ItemWorld::_heat_items() {
+	if (heat.empty()) {
+		return;
+	}
+	for (Body &it : items) {
+		const ItemType &t = types[it.type];
+		double best = -1.0;
+		for (int k = 0; k < t.count; k++) {
+			double px = it.x + it.c * t.local[k * 2] - it.s * t.local[k * 2 + 1];
+			double py = it.y + it.s * t.local[k * 2] + it.c * t.local[k * 2 + 1];
+			int i = _heat_cell(px, py);
+			if (i >= 0 && heat_mat[i] != HEAT_AIR && heat[i] > best) {
+				best = heat[i];
+			}
+		}
+		double rate = AIR_HEATING;
+		double target = heat_at(it.x, it.y);
+		if (best >= 0.0) {
+			rate = CONTACT_HEATING * (double)(1 << t.size_rank);
+			target = best;
+		}
+		it.temp += (target - it.temp) * rate;
+	}
+}
+
+// The glow of hot solids, one RGBA pixel per heat cell, for drawing over the world.
+PackedByteArray ItemWorld::heat_image() const {
+	PackedByteArray data;
+	data.resize(heat.size() * 4);
+	uint8_t *w = data.ptrw();
+	double c[4];
+	for (size_t i = 0; i < heat.size(); i++) {
+		if (heat_mat[i] == HEAT_AIR) {
+			c[0] = c[1] = c[2] = c[3] = 0.0;
+		} else {
+			glow_color(heat[i], c);
+		}
+		for (int k = 0; k < 4; k++) {
+			w[i * 4 + k] = (uint8_t)(c[k] * 255.0 + 0.5);
+		}
+	}
+	return data;
+}
+
 double ItemWorld::type_radius(int p_type) const {
 	return p_type >= 0 && p_type < (int)types.size() ? types[p_type].radius : 0.0;
 }
@@ -435,6 +641,8 @@ void ItemWorld::step() {
 	_update_sleep();
 	_check_support();
 	_collect();
+	_step_heat();
+	_heat_items();
 	tick += 1;
 }
 
@@ -534,6 +742,7 @@ void ItemWorld::_run_sorters() {
 		}
 		Body out;
 		_init_body(out, next.body.type, x, y, next.body.c, next.body.s);
+		out.temp = next.body.temp;
 		out.vx = vx;
 		out.vy = vy;
 		items.push_back(out);
@@ -550,6 +759,7 @@ void ItemWorld::_release_pieces(Crusher &cr) {
 	if (cr.passing) {
 		Body out;
 		_init_body(out, held.type, cr.exit_x, cr.exit_y + held_type.radius + 0.5, held.c, held.s);
+		out.temp = held.temp;
 		out.vy = 40.0;
 		items.push_back(out);
 		return;
@@ -568,6 +778,7 @@ void ItemWorld::_release_pieces(Crusher &cr) {
 		int rot = ((held_type.shape + k) % SPAWN_ROTATION_COUNT) * 2;
 		Body piece;
 		_init_body(piece, type, cr.exit_x + side * piece_size * 1.3, cr.exit_y + piece_size * (1.2 + (k % 2)), SPAWN_ROTATIONS[rot], SPAWN_ROTATIONS[rot + 1]);
+		piece.temp = held.temp;
 		piece.vx = side * 15.0;
 		piece.vy = 40.0;
 		items.push_back(piece);
@@ -1380,6 +1591,7 @@ Dictionary ItemWorld::get_item(int p_index) const {
 	d["radius"] = t.radius;
 	d["sleeping"] = it.sleeping;
 	d["carried"] = it.carried_tick >= tick - 2;
+	d["temp"] = it.temp;
 	// Outline in world space, freshly computed from the current pose.
 	PackedFloat64Array world;
 	for (int i = 0; i < t.count; i++) {
@@ -1453,8 +1665,8 @@ int ItemWorld::spawned_count(int p_spawner) const {
 	return p_spawner >= 0 && p_spawner < (int)spawners.size() ? spawners[p_spawner].count : 0;
 }
 
-// Per item type, the 2D transforms of every item of that type, in the layout MultiMesh
-// expects (8 floats each), so drawing needs no per-item script work.
+// Per item type, the 2D transform and color of every item of that type, in the layout
+// MultiMesh expects (12 floats each), so drawing needs no per-item script work.
 Array ItemWorld::draw_buffers(int p_type_count) const {
 	std::vector<int> counts(p_type_count, 0);
 	for (const Body &it : items) {
@@ -1465,7 +1677,7 @@ Array ItemWorld::draw_buffers(int p_type_count) const {
 	std::vector<PackedFloat32Array> buffers(p_type_count);
 	std::vector<float *> cursors(p_type_count, nullptr);
 	for (int t = 0; t < p_type_count; t++) {
-		buffers[t].resize(counts[t] * 8);
+		buffers[t].resize(counts[t] * 12);
 		cursors[t] = counts[t] > 0 ? buffers[t].ptrw() : nullptr;
 	}
 	for (const Body &it : items) {
@@ -1481,7 +1693,14 @@ Array ItemWorld::draw_buffers(int p_type_count) const {
 		w[5] = (float)it.c;
 		w[6] = 0.0f;
 		w[7] = (float)it.y;
-		cursors[it.type] = w + 8;
+		// A hot item brightens toward its glow color (multiplying its own colors past 1).
+		double g[4];
+		glow_color(it.temp, g);
+		w[8] = (float)(1.0 + g[0] * g[3] * 1.5);
+		w[9] = (float)(1.0 + g[1] * g[3] * 1.5);
+		w[10] = (float)(1.0 + g[2] * g[3] * 1.5);
+		w[11] = 1.0f;
+		cursors[it.type] = w + 12;
 	}
 	Array result;
 	for (int t = 0; t < p_type_count; t++) {
@@ -1545,6 +1764,14 @@ void ItemWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("take_intake", "intake"), &ItemWorld::take_intake);
 	ClassDB::bind_method(D_METHOD("raycast_down", "x", "from_y", "max_y"), &ItemWorld::raycast_down);
 	ClassDB::bind_method(D_METHOD("type_radius", "type"), &ItemWorld::type_radius);
+	ClassDB::bind_method(D_METHOD("heat_fill_rect", "x0", "y0", "x1", "y1", "material"), &ItemWorld::heat_fill_rect);
+	ClassDB::bind_method(D_METHOD("heat_fill_polygon", "points", "material"), &ItemWorld::heat_fill_polygon);
+	ClassDB::bind_method(D_METHOD("add_heater", "x0", "y0", "x1", "y1"), &ItemWorld::add_heater);
+	ClassDB::bind_method(D_METHOD("set_heater_power", "heater", "power"), &ItemWorld::set_heater_power);
+	ClassDB::bind_method(D_METHOD("heat_at", "x", "y"), &ItemWorld::heat_at);
+	ClassDB::bind_method(D_METHOD("heat_image"), &ItemWorld::heat_image);
+	ClassDB::bind_method(D_METHOD("heat_columns"), &ItemWorld::heat_columns);
+	ClassDB::bind_method(D_METHOD("heat_rows_count"), &ItemWorld::heat_rows_count);
 	ClassDB::bind_method(D_METHOD("step"), &ItemWorld::step);
 	ClassDB::bind_method(D_METHOD("get_tick"), &ItemWorld::get_tick);
 	ClassDB::bind_method(D_METHOD("set_tick", "tick"), &ItemWorld::set_tick);

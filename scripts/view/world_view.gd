@@ -23,6 +23,9 @@ var ghost_valid := true
 ## per item, placed and turned by a buffer of transforms the physics fills in directly.
 ## Drawing each item separately costs a frame dozens of milliseconds with a few hundred.
 var _multimeshes := {}
+## The glow of hot solids, one pixel per heat cell, stretched over the world.
+var _heat_image: Image
+var _heat_texture: ImageTexture
 
 
 func _ready() -> void:
@@ -50,10 +53,25 @@ func _draw() -> void:
 			_draw_part(p, Color.WHITE)
 
 	if sim:
+		_draw_heat()
 		_draw_items()
 	elif ghost != null:
 		var tint := Color(1, 1, 1, 0.55) if ghost_valid else Color(1, 0.35, 0.35, 0.55)
 		_draw_part(ghost, tint)
+
+
+## Hot solids glow, from dark red through orange and yellow to near white.
+func _draw_heat() -> void:
+	var columns: int = sim.world.heat_columns()
+	var rows: int = sim.world.heat_rows_count()
+	var data: PackedByteArray = sim.world.heat_image()
+	if _heat_image == null or _heat_image.get_width() != columns or _heat_image.get_height() != rows:
+		_heat_image = Image.create_from_data(columns, rows, false, Image.FORMAT_RGBA8, data)
+		_heat_texture = ImageTexture.create_from_image(_heat_image)
+	else:
+		_heat_image.set_data(columns, rows, false, Image.FORMAT_RGBA8, data)
+		_heat_texture.update(_heat_image)
+	draw_texture_rect(_heat_texture, Rect2(Vector2.ZERO, Vector2(Machine.WIDTH * T, Machine.HEIGHT * T)), false)
 
 
 func _draw_items() -> void:
@@ -67,9 +85,10 @@ func _draw_items() -> void:
 		if multimesh == null:
 			multimesh = MultiMesh.new()
 			multimesh.transform_format = MultiMesh.TRANSFORM_2D
+			multimesh.use_colors = true
 			multimesh.mesh = _quad(art["rect"])
 			_multimeshes[type] = multimesh
-		multimesh.instance_count = buffer.size() / 8
+		multimesh.instance_count = buffer.size() / 12
 		multimesh.buffer = buffer
 		draw_multimesh(multimesh, art["texture"])
 
