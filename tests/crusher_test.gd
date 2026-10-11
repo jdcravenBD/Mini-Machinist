@@ -45,15 +45,17 @@ func _chain_makes_gravel() -> bool:
 	return other == 0 and sim.lost == 0 and gravel > chunks * 9 * 0.6
 
 
-## Bits dropped into a large crusher fall through its gap untouched.
+## Bits dropped into a large crusher are pushed through it unchanged.
 func _bits_fall_through_large() -> bool:
 	var machine := Machine.new()
 	machine.place(&"large_crusher", Vector2i(10, 5))
 	machine.place(&"bin", Vector2i(10, 7))
 	var sim := PartGeometry.build(machine)
-	for k in 6:
-		sim.items.append(Item.new(&"rock" if k % 2 else &"iron_ore", 340.0 + k * 5.0, 120.0 - k * 12.0, k % 4, 1.0, 0.0, &"bit"))
+	# Dropped one at a time, the way a belt or hopper would feed them.
 	for i in 600:
+		if i % 20 == 0 and i < 120:
+			var k := i / 20
+			sim.items.append(Item.new(&"rock" if k % 2 else &"iron_ore", 346.0 + k * 2.0, 120.0, k % 4, 1.0, 0.0, &"bit"))
 		sim.step()
 	var caught: Dictionary = sim.bins[0].by_kind
 	var bits: int = caught.get(&"rock bit", 0) + caught.get(&"iron_ore bit", 0)

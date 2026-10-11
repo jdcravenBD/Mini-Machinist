@@ -22,9 +22,12 @@ var surface_speed: float
 var friction: float
 ## An item kind that goes straight through this line (a sorter's grate), or empty.
 var passes: StringName
+## A conveyor belt surface (eases off on items that are held back). Other moving surfaces,
+## like crusher rollers, keep their full grip.
+var belt: bool
 
 
-func _init(p_ax: float, p_ay: float, p_bx: float, p_by: float, p_surface_speed := 0.0, p_friction := 0.6, p_passes: StringName = &"") -> void:
+func _init(p_ax: float, p_ay: float, p_bx: float, p_by: float, p_surface_speed := 0.0, p_friction := 0.6, p_passes: StringName = &"", p_belt := false) -> void:
 	ax = p_ax
 	ay = p_ay
 	bx = p_bx
@@ -40,3 +43,4 @@ func _init(p_ax: float, p_ay: float, p_bx: float, p_by: float, p_surface_speed :
 	surface_speed = p_surface_speed
 	friction = p_friction
 	passes = p_passes
+	belt = p_belt

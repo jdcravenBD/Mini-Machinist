@@ -12,7 +12,9 @@ const BORDER := Color(1, 1, 1, 0.18)
 const OUTLINE := Color(0, 0, 0, 0.35)
 const BELT := Color(0.15, 0.15, 0.16)
 const BELT_MARK := Color(0.80, 0.68, 0.30)
-const ITEM_OUTLINE := Color(0, 0, 0, 0.45)
+## How dark an item's outline is, and how thick (it's thinner on tiny items).
+const ITEM_OUTLINE_SHADE := 0.45
+const ITEM_OUTLINE_WIDTH := 0.8
 const ROLLER := Color(0.24, 0.24, 0.25)
 const ROLLER_TOOTH := Color(0.55, 0.55, 0.57)
 
@@ -21,8 +23,18 @@ var sim: Simulation
 ## Placement preview, or null when there's nothing to preview.
 var ghost: Part = null
 var ghost_valid := true
-## [kind, size, shape] -> drawing polygons ("body", "fleck", "outline") sized for that kind.
-var _item_polys := {}
+## Items are drawn in batches: every item with the same kind, size and outline shares one
+## mesh, drawn in a single call with just a position and rotation per item. Drawing each
+## item separately costs a frame dozens of milliseconds once a few hundred are on screen.
+class ItemBatch:
+	var multimesh := MultiMesh.new()
+	## 8 floats per item: the 2D transform layout MultiMesh expects.
+	var buffer := PackedFloat32Array()
+	var count := 0
+
+
+## [kind, size, shape] -> ItemBatch
+var _item_batches := {}
 
 
 func _process(_delta: float) -> void:
@@ -36,62 +48,101 @@ func _draw() -> void:
 		_draw_grid(size)
 	draw_rect(Rect2(Vector2.ZERO, size), BORDER, false, 2.0)
 
+	# Items being crushed go behind the parts, so they look pushed down between the rollers.
+	if sim:
+		for cr in sim.crushers:
+			if cr.held != null:
+				_draw_crushing(cr)
+		draw_set_transform_matrix(Transform2D.IDENTITY)
+
 	if machine:
 		for p in machine.parts:
 			_draw_part(p, Color.WHITE)
 
 	if sim:
-		for it in sim.items:
-			_draw_item(it)
-		for cr in sim.crushers:
-			if cr.held != null:
-				_draw_crushing(cr)
-		draw_set_transform_matrix(Transform2D.IDENTITY)
+		_draw_items()
 	elif ghost != null:
 		var tint := Color(1, 1, 1, 0.55) if ghost_valid else Color(1, 0.35, 0.35, 0.55)
 		_draw_part(ghost, tint)
 
 
-## The item's real collision outline, with a lighter fleck so you can see it turn.
-func _draw_item(it: Item) -> void:
+## Every item's real collision outline, with a lighter fleck so you can see it turn.
+func _draw_items() -> void:
+	for batch in _item_batches.values():
+		batch.count = 0
+	for it in sim.items:
+		var batch := _batch_for(it)
+		var at := batch.count * 8
+		if batch.buffer.size() < at + 8:
+			batch.buffer.resize(maxi(64, batch.buffer.size() * 2))
+		batch.buffer[at] = it.c
+		batch.buffer[at + 1] = -it.s
+		batch.buffer[at + 3] = it.x
+		batch.buffer[at + 4] = it.s
+		batch.buffer[at + 5] = it.c
+		batch.buffer[at + 7] = it.y
+		batch.count += 1
+	for batch in _item_batches.values():
+		if batch.count == 0:
+			continue
+		var capacity: int = batch.buffer.size() / 8
+		if batch.multimesh.instance_count != capacity:
+			batch.multimesh.instance_count = capacity
+		batch.multimesh.buffer = batch.buffer
+		batch.multimesh.visible_instance_count = batch.count
+		draw_multimesh(batch.multimesh, null)
+
+
+func _batch_for(it: Item) -> ItemBatch:
 	var key := [it.kind, it.size, it.shape]
-	if not _item_polys.has(key):
-		_item_polys[key] = _build_item_polys(it)
-	var polys: Dictionary = _item_polys[key]
-	var def: Dictionary = ItemDefs.DEFS[it.kind]
-	draw_set_transform_matrix(Transform2D(Vector2(it.c, it.s), Vector2(-it.s, it.c), Vector2(it.x, it.y)))
-	draw_colored_polygon(polys["body"], def["color"])
-	draw_colored_polygon(polys["fleck"], def["fleck"])
-	draw_polyline(polys["outline"], ITEM_OUTLINE, 1.0, true)
+	var batch: ItemBatch = _item_batches.get(key)
+	if batch == null:
+		batch = ItemBatch.new()
+		batch.multimesh.transform_format = MultiMesh.TRANSFORM_2D
+		batch.multimesh.mesh = _build_item_mesh(it)
+		_item_batches[key] = batch
+	return batch
 
 
-## The item being crushed sinks into the gap, shrinking and shaking, until its pieces
-## drop out the bottom as real items.
+## The item being crushed is pushed straight down between the rollers, at full size, until
+## it breaks into pieces that drop out the bottom as real items.
 func _draw_crushing(cr: Simulation.Crusher) -> void:
 	var t := cr.progress()
 	var it := cr.held
-	var key := [it.kind, it.size, it.shape]
-	if not _item_polys.has(key):
-		_item_polys[key] = _build_item_polys(it)
-	var gap_y := cr.max_y
-	var pos := Vector2(lerpf(cr.held_x, cr.exit_x, t), lerpf(cr.held_y, gap_y, t))
-	pos += Vector2(sin(sim.tick * 2.3), cos(sim.tick * 1.7)) * 0.8
-	var scale := 1.0 if cr.passing else lerpf(1.0, 0.45, t)
+	var pos := Vector2(lerpf(cr.held_x, cr.exit_x, t), lerpf(cr.held_y, cr.press_y, t))
+	draw_mesh(_batch_for(it).multimesh.mesh, null, Transform2D(Vector2(it.c, it.s), Vector2(-it.s, it.c), pos))
+
+
+## One item's look as a mesh with baked colors: the body, a dark outline ring just inside
+## its edge, and a lighter fleck.
+func _build_item_mesh(it: Item) -> ArrayMesh:
 	var def: Dictionary = ItemDefs.DEFS[it.kind]
-	draw_set_transform_matrix(Transform2D(Vector2(it.c, it.s) * scale, Vector2(-it.s, it.c) * scale, pos))
-	draw_colored_polygon(_item_polys[key]["body"], def["color"])
-	draw_polyline(_item_polys[key]["outline"], ITEM_OUTLINE, 1.0, true)
-
-
-func _build_item_polys(it: Item) -> Dictionary:
-	var body := PackedVector2Array()
+	var body_color: Color = def["color"]
+	var outline_color := body_color.lerp(Color.BLACK, ITEM_OUTLINE_SHADE)
+	var corners: Array[Vector2] = []
 	for i in it.count:
-		body.append(Vector2(it.local[i * 2], it.local[i * 2 + 1]))
-	var outline := body.duplicate()
-	outline.append(body[0])
+		corners.append(Vector2(it.local[i * 2], it.local[i * 2 + 1]))
+	var width := minf(ITEM_OUTLINE_WIDTH, it.radius * 0.15)
+	var verts := PackedVector2Array()
+	var colors := PackedColorArray()
+	for i in it.count:
+		var a := corners[i]
+		var b := corners[(i + 1) % it.count]
+		var a_in := a * (1.0 - width / a.length())
+		var b_in := b * (1.0 - width / b.length())
+		verts.append_array([Vector2.ZERO, a_in, b_in, a, b, b_in, a, b_in, a_in])
+		colors.append_array([body_color, body_color, body_color, outline_color, outline_color, outline_color, outline_color, outline_color, outline_color])
 	# Fleck: a small facet between the first two corners, pulled toward the center.
-	var fleck := PackedVector2Array([body[0] * 0.75, body[1] * 0.75, (body[0] + body[1]) * 0.2])
-	return {"body": body, "fleck": fleck, "outline": outline}
+	verts.append_array([corners[0] * 0.75, corners[1] * 0.75, (corners[0] + corners[1]) * 0.2])
+	var fleck: Color = def["fleck"]
+	colors.append_array([fleck, fleck, fleck])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 
 func _draw_grid(size: Vector2) -> void:

@@ -30,8 +30,12 @@ const MAX_ITEMS := 600
 ## Largest item bounding radius; static segments are registered with this much margin.
 const MAX_RADIUS := 9.0
 const SEG_CELL := 32.0
-## At least the largest item diameter, so touching items are always in neighbouring cells.
-const ITEM_CELL := 18.0
+## Neighbour-finding grid. Cells are about a gravel piece wide; bigger items are listed in
+## every cell they cover, so each item only ever looks at things actually near it whether
+## it's a chunk or a grain.
+const ITEM_CELL := 6.0
+## How far outside the world the grid reaches (items past this are about to be removed).
+const GRID_MARGIN := 64.0
 ## Solid tile kinds, for pushing out items that a heavy pile squeezed into a solid.
 enum Solid { NONE, BOX, RAMP_DOWN_RIGHT, RAMP_DOWN_LEFT }
 const INV_SQRT2 := 0.7071067811865476
@@ -91,10 +95,11 @@ class Bin:
 		return px > min_x and px < max_x and py > min_y and py < max_y
 
 
-## Crushes one item at a time. An item that settles into its intake (the dip between its
-## rollers) is pulled in. The size it `takes` is held for `duration` ticks while it's
-## crushed, then comes out the bottom as `pieces` items of the next size down. Anything
-## smaller is pulled straight through unchanged; anything bigger just sits there, clogging it.
+## Crushes one item at a time. The rollers carry whatever lands on them into the dip in the
+## middle; an item that reaches the dip (`intake`) is pushed down between the rollers. The
+## size it `takes` is held for `duration` ticks while it's pushed down to `press_y`, then
+## breaks into `pieces` items of the next size down that drop out the bottom. Anything
+## smaller is pushed through unchanged; anything bigger just sits there, clogging it.
 class Crusher:
 	var takes: StringName
 	var makes: StringName
@@ -106,6 +111,8 @@ class Crusher:
 	var max_y: float
 	var exit_x: float
 	var exit_y: float
+	## How far down the held item is pushed before it breaks (the rollers' middle).
+	var press_y: float
 	## The item being crushed (out of the physics while inside), and where it was caught.
 	var held: Item = null
 	var held_x := 0.0
@@ -165,8 +172,17 @@ var _seg_grid := {}
 var _solid := PackedByteArray()
 var _cols := 0
 var _rows := 0
-## Item grid from the latest substep (cell key -> item indices).
-var _item_grid := {}
+## Item grid from the latest substep, as linked lists in flat arrays: _cell_head[cell] is
+## the first node in that cell, each node names an item and the next node (-1 ends a list).
+var _grid_cols := 1
+var _grid_rows := 1
+var _cell_head := PackedInt32Array()
+var _node_item := PackedInt32Array()
+var _node_next := PackedInt32Array()
+## Per item, the last query that already visited it, so an item listed in several cells is
+## only looked at once per query.
+var _seen := PackedInt32Array()
+var _query := 0
 var _item_contacts := Contacts.new()
 var _wall_contacts := Contacts.new()
 ## Penetration depth found by the last _deepest_face call.
@@ -181,6 +197,9 @@ func set_bounds(cols: int, rows: int) -> void:
 	_kill_min_x = -64.0
 	_kill_max_x = cols * SEG_CELL + 64.0
 	_kill_max_y = rows * SEG_CELL + 64.0
+	_grid_cols = ceili((cols * SEG_CELL + GRID_MARGIN * 2.0) / ITEM_CELL)
+	_grid_rows = ceili((rows * SEG_CELL + GRID_MARGIN * 2.0) / ITEM_CELL)
+	_cell_head.resize(_grid_cols * _grid_rows)
 
 
 func set_solid(cell: Vector2i, kind: Solid) -> void:
@@ -200,13 +219,15 @@ func add_bin(min_x: float, min_y: float, max_x: float, max_y: float) -> void:
 	bins.append(Bin.new(min_x, min_y, max_x, max_y))
 
 
-## `intake` is where a waiting item gets pulled in; pieces come out at `exit`, falling.
-func add_crusher(takes: StringName, makes: StringName, pieces: int, duration: int, intake: Rect2, exit_x: float, exit_y: float) -> Crusher:
+## `intake` is the dip where an item gets taken; it's pushed down to `press_y`, and pieces
+## come out at `exit`, falling.
+func add_crusher(takes: StringName, makes: StringName, pieces: int, duration: int, intake: Rect2, press_y: float, exit_x: float, exit_y: float) -> Crusher:
 	var crusher := Crusher.new(takes, makes, pieces, duration)
 	crusher.min_x = intake.position.x
 	crusher.min_y = intake.position.y
 	crusher.max_x = intake.end.x
 	crusher.max_y = intake.end.y
+	crusher.press_y = press_y
 	crusher.exit_x = exit_x
 	crusher.exit_y = exit_y
 	crushers.append(crusher)
@@ -419,15 +440,7 @@ func _finish_substep() -> void:
 func _detect() -> void:
 	_item_contacts.clear()
 	_wall_contacts.clear()
-	var grid := {}
-	_item_grid = grid
-	for i in items.size():
-		var it := items[i]
-		var key := _cell_key(floori(it.x / ITEM_CELL), floori(it.y / ITEM_CELL))
-		if grid.has(key):
-			grid[key].append(i)
-		else:
-			grid[key] = [i]
+	_build_item_grid()
 
 	# Only awake items look for contacts; two sleepers never need resolving.
 	for i in items.size():
@@ -439,24 +452,55 @@ func _detect() -> void:
 			for si in walls:
 				_detect_wall(i, a, si)
 
-		var cx := floori(a.x / ITEM_CELL)
-		var cy := floori(a.y / ITEM_CELL)
-		for oy in range(-1, 2):
-			for ox in range(-1, 2):
-				var list = grid.get(_cell_key(cx + ox, cy + oy))
-				if list == null:
-					continue
-				for j in list:
+		_query += 1
+		var reach_a := a.radius + SUPPORT_GAP
+		var gx0 := _grid_x(a.x - reach_a)
+		var gx1 := _grid_x(a.x + reach_a)
+		for gy in range(_grid_y(a.y - reach_a), _grid_y(a.y + reach_a) + 1):
+			for gx in range(gx0, gx1 + 1):
+				var node := _cell_head[gy * _grid_cols + gx]
+				while node >= 0:
+					var j := _node_item[node]
+					node = _node_next[node]
+					if _seen[j] == _query:
+						continue
+					_seen[j] = _query
 					var b := items[j]
-					if not b.sleeping and j <= i:
+					if j == i or (not b.sleeping and j < i):
 						continue
 					var dx := b.x - a.x
 					var dy := b.y - a.y
-					var reach := a.radius + b.radius + SUPPORT_GAP
+					var reach := reach_a + b.radius
 					if dx * dx + dy * dy < reach * reach:
 						if b.sleeping:
 							b.near_tick = tick
 						_detect_pair(i, a, j, b)
+
+
+## Lists every item in each grid cell its bounding box covers.
+func _build_item_grid() -> void:
+	_cell_head.fill(-1)
+	_node_item.clear()
+	_node_next.clear()
+	_seen.resize(items.size())
+	for i in items.size():
+		var it := items[i]
+		var gx0 := _grid_x(it.x - it.radius)
+		var gx1 := _grid_x(it.x + it.radius)
+		for gy in range(_grid_y(it.y - it.radius), _grid_y(it.y + it.radius) + 1):
+			for gx in range(gx0, gx1 + 1):
+				var cell := gy * _grid_cols + gx
+				_node_item.append(i)
+				_node_next.append(_cell_head[cell])
+				_cell_head[cell] = _node_item.size() - 1
+
+
+func _grid_x(x: float) -> int:
+	return clampi(floori((x + GRID_MARGIN) / ITEM_CELL), 0, _grid_cols - 1)
+
+
+func _grid_y(y: float) -> int:
+	return clampi(floori((y + GRID_MARGIN) / ITEM_CELL), 0, _grid_rows - 1)
 
 
 ## Contacts where a corner of one item pokes into the other.
@@ -723,7 +767,7 @@ func _apply_friction(a: Item, b: Item, seg: Segment, lax: float, lay: float, lbx
 		weight += b.inv_mass + b.inv_inertia * crb * crb
 	var lam_t := minf(slide / weight, mu * lam)
 
-	if seg != null and seg.surface_speed != 0.0:
+	if seg != null and seg.belt:
 		# A belt mostly slips under an item that something is holding back (a wall, the item
 		# ahead in a queue), keeping only BELT_PRESS of its grip. Full grip would squash a
 		# long queue together; none would leave a backed-up queue limp.
@@ -843,9 +887,6 @@ func _update_sleep() -> void:
 		if _is_carried(it):
 			it.still_ticks = 0
 			continue
-		if it.vx * it.vx + it.vy * it.vy > WAKE_SPEED * WAKE_SPEED:
-			it.still_ticks = 0
-			continue
 		var mx := it.x - it.still_x
 		var my := it.y - it.still_y
 		var turned := absf(it.still_c * it.s - it.still_s * it.c)
@@ -902,20 +943,23 @@ func _is_supported(index: int) -> bool:
 				if face >= 0 and it.world_normals[face * 2 + 1] > SUPPORT_SLOPE:
 					return true
 
-	var cx := floori(it.x / ITEM_CELL)
-	var cy := floori(it.y / ITEM_CELL)
-	for oy in range(-1, 2):
-		for ox in range(-1, 2):
-			var cell = _item_grid.get(_cell_key(cx + ox, cy + oy))
-			if cell == null:
-				continue
-			for j in cell:
-				if j == index:
+	_query += 1
+	var reach_it := it.radius + SUPPORT_GAP
+	var gx0 := _grid_x(it.x - reach_it)
+	var gx1 := _grid_x(it.x + reach_it)
+	for gy in range(_grid_y(it.y - reach_it), _grid_y(it.y + reach_it) + 1):
+		for gx in range(gx0, gx1 + 1):
+			var node := _cell_head[gy * _grid_cols + gx]
+			while node >= 0:
+				var j := _node_item[node]
+				node = _node_next[node]
+				if j == index or _seen[j] == _query:
 					continue
+				_seen[j] = _query
 				var o := items[j]
 				var dx := o.x - it.x
 				var dy := o.y - it.y
-				var reach := it.radius + o.radius + SUPPORT_GAP
+				var reach := reach_it + o.radius
 				if dx * dx + dy * dy >= reach * reach:
 					continue
 				for k in it.count:
@@ -979,7 +1023,7 @@ static func _merge_runs(input: Array[Segment]) -> Array[Segment]:
 	for sg in input:
 		# Point each straight segment toward +x or +y (flipping a belt flips its speed too).
 		if (sg.ay == sg.by and sg.ax > sg.bx) or (sg.ax == sg.bx and sg.ay > sg.by):
-			sg = Segment.new(sg.bx, sg.by, sg.ax, sg.ay, -sg.surface_speed, sg.friction, sg.passes)
+			sg = Segment.new(sg.bx, sg.by, sg.ax, sg.ay, -sg.surface_speed, sg.friction, sg.passes, sg.belt)
 		if sg.ay == sg.by or sg.ax == sg.bx:
 			straight.append(sg)
 		else:
@@ -1009,9 +1053,9 @@ static func _merge_runs(input: Array[Segment]) -> Array[Segment]:
 		if run != null and _continues(run, sg):
 			if sg.ay == sg.by:
 				if sg.bx > run.bx:
-					run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction, run.passes)
+					run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction, run.passes, run.belt)
 			elif sg.by > run.by:
-				run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction, run.passes)
+				run = Segment.new(run.ax, run.ay, sg.bx, sg.by, run.surface_speed, run.friction, run.passes, run.belt)
 			continue
 		if run != null:
 			result.append(run)
@@ -1024,7 +1068,7 @@ static func _merge_runs(input: Array[Segment]) -> Array[Segment]:
 ## True if `next` lies on the same line as `run`, behaves the same, and starts where `run`
 ## ends (or before).
 static func _continues(run: Segment, next: Segment) -> bool:
-	if run.surface_speed != next.surface_speed or run.friction != next.friction or run.passes != next.passes:
+	if run.surface_speed != next.surface_speed or run.friction != next.friction or run.passes != next.passes or run.belt != next.belt:
 		return false
 	if run.ay == run.by:
 		return next.ay == next.by and next.ay == run.ay and next.ax <= run.bx

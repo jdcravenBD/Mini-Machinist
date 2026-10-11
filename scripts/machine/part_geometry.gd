@@ -17,9 +17,10 @@ const PANEL_THICKNESS := 6.0
 ## between them; the crusher itself decides what goes through (see Simulation.Crusher).
 const LARGE_ROLLER := 15.0
 const SMALL_ROLLER := 7.5
-## How fast the roller surfaces move, pulling what sits on them in toward the gap.
+## How fast the roller surfaces move, carrying what sits on them in toward the middle.
+## Their teeth bite, so they grip far harder than a smooth surface.
 const ROLLER_SPEED := 40.0
-const ROLLER_FRICTION := 0.9
+const ROLLER_GRIP := 3.0
 ## Ticks to crush one item (60 ticks = 1 second). Each crusher runs a little faster than the
 ## one before it can feed it (spawner 2 chunks/s, large 2.5 chunks/s = 7.5 bits/s, small 10
 ## bits/s), so a simple line never backs up.
@@ -60,30 +61,30 @@ static func build(machine: Machine) -> Simulation:
 				_add_box(sim, machine, p, belt_speed(p))
 			&"sorter":
 				# A belt top that the filtered kind falls straight through, over an open chute.
-				_solid(sim, x0, y0, x1, y0, belt_speed(p), BELT_FRICTION, p.filter)
+				sim.add_segment(Segment.new(x0, y0, x1, y0, belt_speed(p), BELT_FRICTION, p.filter, true))
 				_solid(sim, x0, y1, x0, y0)
 				_solid(sim, x1, y0, x1, y1)
 			&"panel":
 				_add_panel(sim, machine, p)
 			&"large_crusher":
-				# Two big rollers side by side, turning in toward each other at the top. Their teeth
-				# bite whatever rests on their upper half (or is wedged in a hopper's outlet just
-				# above), so nothing can sit stuck at the edge where a belt hands over.
+				# Two big rollers side by side, turning in toward each other at the top, so what
+				# lands on them rolls into the dip in the middle. The intake reaches high enough
+				# to take the lower of two chunks wedged in a hopper's outlet just above.
 				var mid := x0 + T
 				_add_roller(sim, x0 + T * 0.5, y0 + T * 0.5, LARGE_ROLLER, ROLLER_SPEED)
 				_add_roller(sim, x1 - T * 0.5, y0 + T * 0.5, LARGE_ROLLER, -ROLLER_SPEED)
 				sim.add_crusher(&"chunk", &"bit", CRUSH_PIECES, LARGE_CRUSH_TICKS,
-						Rect2(x0, y0 - 12.0, x1 - x0, T * 0.5 + 12.0), mid, y1)
+						Rect2(mid - 7.0, y0 - 10.0, 14.0, T * 0.5 + 10.0), y0 + T * 0.5, mid, y1)
 			&"small_crusher":
 				# Four small rollers, one per quarter of the tile. Each pair turns in toward the
-				# middle; the top pair bites whatever rests on it.
+				# middle, so what lands on top rolls into the dip between the top pair.
 				var mid := x0 + T * 0.5
 				for row in 2:
 					var cy := y0 + T * (0.25 + row * 0.5)
 					_add_roller(sim, x0 + T * 0.25, cy, SMALL_ROLLER, ROLLER_SPEED)
 					_add_roller(sim, x0 + T * 0.75, cy, SMALL_ROLLER, -ROLLER_SPEED)
 				sim.add_crusher(&"bit", &"gravel", CRUSH_PIECES, SMALL_CRUSH_TICKS,
-						Rect2(x0, y0 - 6.0, T, T * 0.25 + 6.0), mid, y1)
+						Rect2(mid - 4.0, y0 - 6.0, 8.0, T * 0.25 + 6.0), y0 + T * 0.5, mid, y1)
 			&"ramp":
 				_add_ramp(sim, machine, p, x0, y0, x1, y1)
 			&"hopper":
@@ -180,8 +181,10 @@ static func _add_box(sim: Simulation, machine: Machine, p: Part, top_speed: floa
 	var x1 := x0 + T
 	var y1 := y0 + T
 	if not has_full_edge(machine, p.cell + Vector2i.UP, Vector2i.DOWN):
-		var friction := BELT_FRICTION if top_speed != 0.0 else SURFACE_FRICTION
-		_solid(sim, x0, y0, x1, y0, top_speed, friction)
+		if top_speed != 0.0:
+			sim.add_segment(Segment.new(x0, y0, x1, y0, top_speed, BELT_FRICTION, &"", true))
+		else:
+			_solid(sim, x0, y0, x1, y0)
 	if not has_full_edge(machine, p.cell + Vector2i.RIGHT, Vector2i.LEFT):
 		_solid(sim, x1, y0, x1, y1)
 	if not has_full_edge(machine, p.cell + Vector2i.DOWN, Vector2i.UP):
@@ -213,7 +216,7 @@ static func _add_roller(sim: Simulation, cx: float, cy: float, radius: float, sp
 		sim.add_segment(Segment.new(
 				cx + CIRCLE_12[i * 2] * radius, cy + CIRCLE_12[i * 2 + 1] * radius,
 				cx + CIRCLE_12[j * 2] * radius, cy + CIRCLE_12[j * 2 + 1] * radius,
-				speed, ROLLER_FRICTION))
+				speed, ROLLER_GRIP))
 
 
 static func _solid(sim: Simulation, ax: float, ay: float, bx: float, by: float, speed := 0.0, friction := SURFACE_FRICTION, passes: StringName = &"") -> void:
