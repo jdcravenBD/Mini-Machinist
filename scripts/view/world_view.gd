@@ -9,10 +9,6 @@ const T := PartDefs.TILE
 const BACKGROUND := Color(0.16, 0.155, 0.15)
 const GRID_LINE := Color(1, 1, 1, 0.05)
 const BORDER := Color(1, 1, 1, 0.18)
-## Inside a crucible: unmelted pieces, molten iron and slag.
-const CRUCIBLE_SOLIDS := Color(0.50, 0.33, 0.24)
-const MOLTEN_IRON := Color(1.0, 0.62, 0.18)
-const MOLTEN_SLAG := Color(0.42, 0.26, 0.16)
 
 var machine: Machine
 var sim: Simulation
@@ -26,6 +22,10 @@ var _multimeshes := {}
 ## The glow of hot solids, one pixel per heat cell, stretched over the world.
 var _heat_image: Image
 var _heat_texture: ImageTexture
+## Molten and hardened metal, one texture per block of the pixel layer that has any in it
+## (chunk index -> ImageTexture), refreshed only where the metal changed.
+var _chunks := {}
+var _chunks_sim: Simulation
 
 
 func _ready() -> void:
@@ -54,6 +54,7 @@ func _draw() -> void:
 
 	if sim:
 		_draw_heat()
+		_draw_metal()
 		_draw_items()
 	elif ghost != null:
 		var tint := Color(1, 1, 1, 0.55) if ghost_valid else Color(1, 0.35, 0.35, 0.55)
@@ -72,6 +73,28 @@ func _draw_heat() -> void:
 		_heat_image.set_data(columns, rows, false, Image.FORMAT_RGBA8, data)
 		_heat_texture.update(_heat_image)
 	draw_texture_rect(_heat_texture, Rect2(Vector2.ZERO, Vector2(Machine.WIDTH * T, Machine.HEIGHT * T)), false)
+
+
+## Molten metal flowing and hardened metal lying where it set.
+func _draw_metal() -> void:
+	if _chunks_sim != sim:
+		_chunks.clear()
+		_chunks_sim = sim
+	var size: int = sim.world.chunk_size()
+	for chunk in sim.world.dirty_chunks():
+		var data: PackedByteArray = sim.world.chunk_image(chunk)
+		if data.is_empty():
+			_chunks.erase(chunk)
+			continue
+		var image := Image.create_from_data(size, size, false, Image.FORMAT_RGBA8, data)
+		var texture: ImageTexture = _chunks.get(chunk)
+		if texture == null:
+			_chunks[chunk] = ImageTexture.create_from_image(image)
+		else:
+			texture.update(image)
+	var columns: int = sim.world.chunk_columns()
+	for chunk in _chunks:
+		draw_texture(_chunks[chunk], Vector2(chunk % columns, chunk / columns) * size)
 
 
 func _draw_items() -> void:
@@ -149,13 +172,11 @@ func _draw_part(p: Part, tint: Color) -> void:
 				var cy := T * (0.25 + row * 0.5)
 				_draw_roller(origin + Vector2(T * 0.25, cy), r, 1.0, def, tint)
 				_draw_roller(origin + Vector2(T * 0.75, cy), r, -1.0, def, tint)
-		&"crucible":
-			_draw_crucible(p, tint)
 		&"bellows":
 			# Squashed from the top while it's pumping.
 			var art := PixelArt.part(p)
 			var texture: Texture2D = art["texture"]
-			var squash := 6.0 if sim and Smelter.is_pumping(sim.tick) else 0.0
+			var squash := 6.0 if sim and Simulation.is_pumping(sim.tick) else 0.0
 			draw_texture_rect(texture, Rect2(origin + Vector2(0, squash), Vector2(T, T - squash)), false, tint)
 		_:
 			var art := PixelArt.part(p)
@@ -171,35 +192,3 @@ func _draw_roller(center: Vector2, radius: float, direction: float, def: Diction
 	draw_set_transform(center, turn)
 	draw_texture(art["texture"], art["offset"], tint)
 	draw_set_transform_matrix(Transform2D.IDENTITY)
-
-
-## A crucible: its body, what's inside (unmelted pieces, molten iron, slag floating on top),
-## its temperature, and, while pouring, tipped over with a stream falling from its lip.
-func _draw_crucible(p: Part, tint: Color) -> void:
-	var rect := Rect2(Vector2(p.cell * T), Vector2(PartDefs.size_of(p.type) * T))
-	var smelter: Smelter = sim.smelters_by_cell.get(p.cell) if sim else null
-	# Tipping pivots on the bottom corner on the pouring side.
-	var tilt := smelter.tilt * smelter.pour_dir if smelter else 0.0
-	var pivot := Vector2(rect.end.x if tilt > 0.0 else rect.position.x, rect.end.y)
-	draw_set_transform(pivot, tilt * Smelter.TILT_ANGLE)
-	var local := Rect2(rect.position - pivot, rect.size)
-	draw_texture(PixelArt.part(p)["texture"], local.position, tint)
-	if smelter:
-		# Fill levels, bottom up, as a share of what the crucible holds.
-		var inside := local.grow(-4.0)
-		var y := inside.end.y
-		for layer in [[smelter.solid_amount(), CRUCIBLE_SOLIDS], [smelter.iron, MOLTEN_IRON], [smelter.slag, MOLTEN_SLAG]]:
-			var height := floorf(minf(y - inside.position.y, inside.size.y * layer[0] / Smelter.CAPACITY))
-			if height > 0.0:
-				draw_rect(Rect2(Vector2(inside.position.x, y - height), Vector2(inside.size.x, height)), layer[1] * tint)
-				y -= height
-	draw_set_transform_matrix(Transform2D.IDENTITY)
-	if smelter:
-		var hot := clampf((smelter.temperature - 300.0) / (Smelter.MELT_POINT - 300.0), 0.0, 1.0)
-		var label := Color(0.8, 0.8, 0.8).lerp(MOLTEN_IRON, hot)
-		var font := ThemeDB.fallback_font
-		var text := "%d°" % roundi(smelter.temperature)
-		var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 9).x
-		draw_string(font, Vector2(rect.get_center().x - width * 0.5, rect.position.y - 2), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, label)
-		if smelter.stream_on:
-			draw_line(Vector2(smelter.stream_x, smelter.stream_top), Vector2(smelter.stream_x, smelter.stream_y), MOLTEN_IRON, 3.0)

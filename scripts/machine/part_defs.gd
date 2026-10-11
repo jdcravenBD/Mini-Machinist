@@ -11,7 +11,7 @@ const TILE := 32
 const CATEGORIES := [
 	{"name": "Moving", "parts": [&"conveyor", &"sorter", &"ramp", &"hopper"]},
 	{"name": "Crushing", "parts": [&"large_crusher", &"small_crusher"]},
-	{"name": "Smelting", "parts": [&"crucible", &"heating_coil", &"bellows", &"insulation", &"skimmer", &"tilter"]},
+	{"name": "Smelting", "parts": [&"heating_coil", &"bellows", &"insulation", &"skimmer"]},
 	{"name": "Building", "parts": [&"block", &"panel"]},
 	{"name": "Testing", "parts": [&"spawner", &"bin"]},
 ]
@@ -73,21 +73,13 @@ const DEFS := {
 		"color": Color(0.55, 0.53, 0.58),
 		"hint": "Four small rollers crush each bit into 3 gravel. Gravel passes through; a chunk is too big and clogs it.",
 	},
-	&"crucible": {
-		"name": "Crucible",
-		"letter": "C",
-		"size": Vector2i(2, 1),
-		"variants": 1,
-		"color": Color(0.36, 0.33, 0.36),
-		"hint": "Swallows ore dropped in and melts it once it's hot enough (1500°): ore into iron and slag, rock into slag. Smaller pieces melt faster. Cools below that and the iron hardens again.",
-	},
 	&"heating_coil": {
 		"name": "Heating Coil",
 		"letter": "H",
 		"size": Vector2i(1, 1),
 		"variants": 1,
 		"color": Color(0.93, 0.50, 0.15),
-		"hint": "Heats every crucible it touches. One coil alone can't reach 1500°: add bellows, insulation or a second coil.",
+		"hint": "Heats whatever it touches; heat spreads through panels, blocks and the ore resting on them. Ore melts into liquid metal when hot enough (iron 1500°). One coil alone can't get there: add bellows, insulation or a second coil.",
 	},
 	&"bellows": {
 		"name": "Bellows",
@@ -103,7 +95,7 @@ const DEFS := {
 		"size": Vector2i(1, 1),
 		"variants": 1,
 		"color": Color(0.85, 0.82, 0.72),
-		"hint": "Each piece touching a crucible cuts the heat it loses.",
+		"hint": "Barely passes heat: wrap a coil or a melting box in it to keep the heat in.",
 	},
 	&"skimmer": {
 		"name": "Skimmer",
@@ -111,15 +103,7 @@ const DEFS := {
 		"size": Vector2i(1, 1),
 		"variants": 1,
 		"color": Color(0.25, 0.55, 0.55),
-		"hint": "Scrapes the slag off a crucible it touches (it can sit over half the crucible's mouth) and drops it out its far side.",
-	},
-	&"tilter": {
-		"name": "Tilter",
-		"letter": "T",
-		"size": Vector2i(1, 1),
-		"variants": 1,
-		"color": Color(0.50, 0.40, 0.62),
-		"hint": "Next to a crucible, tips it to pour out the far side once everything inside has melted. Slag floats, so it pours out first.",
+		"hint": "Takes molten slag touching it (slag floats on molten iron) and drops it out its far side as lumps.",
 	},
 	&"block": {
 		"name": "Block",

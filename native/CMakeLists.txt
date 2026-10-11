@@ -11,7 +11,7 @@ project(mini_machinist_physics LANGUAGES CXX)
 set(GODOTCPP_API_VERSION "4.7" CACHE STRING "Godot API version to build against")
 add_subdirectory(godot-cpp)
 
-add_library(physics SHARED src/register_types.cpp src/item_world.cpp src/item_world.h)
+add_library(physics SHARED src/register_types.cpp src/item_world.cpp src/pixel_world.cpp src/item_world.h)
 target_link_libraries(physics PRIVATE godot-cpp)
 
 # The physics must give bit-identical results everywhere, so never fuse multiply and add.

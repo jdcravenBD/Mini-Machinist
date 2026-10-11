@@ -8,24 +8,28 @@ class_name ItemDefs
 const ORDER: Array[StringName] = [&"iron_ore", &"rock", &"scrap_iron", &"slag"]
 
 ## "size" is a chunk's scale in pixels (a tile is 32); smaller sizes scale down from it.
+## "melt" is the temperature at which a piece turns into molten metal pixels: iron ore into
+## mostly iron with some slag, rock and slag into slag, scrap iron into iron.
 const DEFS := {
 	&"iron_ore": {
 		"name": "Iron Ore",
 		"size": 6.5,
+		"melt": 1500.0,
 		"color": Color(0.62, 0.36, 0.25),
 		"fleck": Color(0.80, 0.52, 0.36),
 	},
 	&"rock": {
 		"name": "Rock",
 		"size": 7.5,
+		"melt": 1300.0,
 		"color": Color(0.50, 0.50, 0.48),
 		"fleck": Color(0.64, 0.64, 0.61),
 	},
-	# Molten iron that hardened outside a mold (poured onto the floor, or cooled in the
-	# crucible). Melts back down.
+	# Loose lumps of iron. Melts back down.
 	&"scrap_iron": {
 		"name": "Scrap Iron",
 		"size": 6.5,
+		"melt": 1500.0,
 		"color": Color(0.58, 0.60, 0.64),
 		"fleck": Color(0.78, 0.80, 0.84),
 	},
@@ -33,6 +37,7 @@ const DEFS := {
 	&"slag": {
 		"name": "Slag",
 		"size": 7.0,
+		"melt": 1250.0,
 		"color": Color(0.24, 0.27, 0.25),
 		"fleck": Color(0.38, 0.44, 0.40),
 	},

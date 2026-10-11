@@ -2,9 +2,10 @@ class_name Simulation
 extends RefCounted
 ## Item physics for one running machine.
 ##
-## The heavy lifting (items as rigid polygons, contacts, belts, sleeping, spawners, crushers
-## and bins) runs in native code: ItemWorld, built from native/src (see native/CMakeLists.txt).
-## This class feeds it parts and item names, and turns its results back into names.
+## The heavy lifting (items as rigid polygons, belts, spawners, crushers, sorters, bins, heat,
+## and molten and hardened metal pixels) runs in native code: ItemWorld, built from native/src
+## (see native/CMakeLists.txt). This class feeds it parts and item names, and turns its results
+## back into names.
 ##
 ## Items are identified by a type id: one per material, size and outline shape, numbered
 ## the same way in every simulation (see type_id) so drawing can batch by it.
@@ -14,6 +15,8 @@ const TICK_RATE := 60
 ## it multiplies that by (on top of 1).
 const COIL_POWER := 6.5
 const BELLOWS_BOOST := 1.0
+## Bellows pump for the first half of every cycle (ticks).
+const BELLOWS_CYCLE := 120
 ## What heat cells are made of (matches ItemWorld's materials).
 enum HeatMaterial { AIR, METAL, INSULATION }
 
@@ -42,13 +45,7 @@ var delivered: Dictionary:
 ## Heating coils: [heater id in the world, number of bellows touching the coil].
 var heaters: Array = []
 
-## Crucibles and the smelting parts touching them, run after the physics each tick.
-var smelters: Array[Smelter] = []
-## Crucible cell -> its Smelter, for drawing.
-var smelters_by_cell := {}
-
 var _bin_rects: Array[Rect2] = []
-var _wall_groups := 0
 
 
 func _init() -> void:
@@ -57,6 +54,13 @@ func _init() -> void:
 		for size in ItemDefs.SIZES:
 			for shape in ItemDefs.SHAPES.size():
 				world.register_type(ItemDefs.ORDER.find(kind), ItemDefs.size_rank(size), shape, ItemDefs.outline(kind, size, shape))
+	for kind in ItemDefs.ORDER:
+		world.set_melt_point(ItemDefs.ORDER.find(kind), ItemDefs.DEFS[kind]["melt"])
+
+
+## True while bellows are pumping.
+static func is_pumping(at_tick: int) -> bool:
+	return at_tick % BELLOWS_CYCLE < BELLOWS_CYCLE / 2
 
 
 static func type_count() -> int:
@@ -86,7 +90,7 @@ func set_solid(cell: Vector2i, kind: Solid) -> void:
 
 ## Collected until finish_build(), which joins straight runs and indexes them.
 func add_segment(seg: Segment) -> void:
-	world.add_segment(seg.ax, seg.ay, seg.bx, seg.by, seg.surface_speed, seg.friction, ItemDefs.ORDER.find(seg.passes), seg.belt, seg.group)
+	world.add_segment(seg.ax, seg.ay, seg.bx, seg.by, seg.surface_speed, seg.friction, ItemDefs.ORDER.find(seg.passes), seg.belt)
 
 
 ## Emits a repeating ore/rock chunk pattern from a point, pausing while the output is blocked.
@@ -112,18 +116,42 @@ func add_crusher(takes: StringName, makes: StringName, pieces: int, duration: in
 			intake.position.x, intake.position.y, intake.end.x, intake.end.y, press_y, exit_x, exit_y)
 
 
-## Fills the heat cells a part covers with its material.
-func fill_heat(origin: Vector2, shapes: Dictionary, material: HeatMaterial) -> void:
+## Fills in what a part covers: its material in the heat map, and wall in the pixel layer
+## (molten metal can't flow into it).
+func fill_part(origin: Vector2, shapes: Dictionary, material: HeatMaterial) -> void:
 	for r in shapes["rects"]:
 		var rect: Rect2 = r
 		world.heat_fill_rect(origin.x + rect.position.x, origin.y + rect.position.y, origin.x + rect.end.x, origin.y + rect.end.y, material)
-	for polygon in shapes["polygons"]:
-		world.heat_fill_polygon(_flat(polygon, origin), material)
+		world.pixel_fill_rect(origin.x + rect.position.x, origin.y + rect.position.y, origin.x + rect.end.x, origin.y + rect.end.y)
+	var outlines: Array[PackedVector2Array] = []
+	outlines.assign(shapes["polygons"])
 	for circle in shapes["circles"]:
 		var ring := PackedVector2Array()
 		for i in 12:
 			ring.append(circle[0] + Vector2(PartGeometry.CIRCLE_12[i * 2], PartGeometry.CIRCLE_12[i * 2 + 1]) * circle[1])
-		world.heat_fill_polygon(_flat(ring, origin), material)
+		outlines.append(ring)
+	for outline in outlines:
+		world.heat_fill_polygon(_flat(outline, origin), material)
+		world.pixel_fill_polygon(_flat(outline, origin))
+
+
+## A skimmer's box: molten slag touching it is taken off and dropped out its far side.
+func add_skimmer(area: Rect2) -> void:
+	var lumps := PackedInt32Array()
+	for shape in ItemDefs.SHAPES.size():
+		lumps.append(type_id(&"slag", &"bit", shape))
+	world.add_skimmer(area.position.x, area.position.y, area.end.x, area.end.y, lumps)
+
+
+## Pours molten iron (or slag) at `temp` into the empty pixels of `area`.
+func add_liquid(area: Rect2, iron: bool, temp: float) -> void:
+	world.add_liquid(area.position.x, area.position.y, area.end.x, area.end.y, iron, temp)
+
+
+## How many pixels of each metal there are, and their average heights:
+## {"iron", "slag", "solid_iron", "solid_slag", and each with "_y"}.
+func pixel_counts() -> Dictionary:
+	return world.pixel_counts()
 
 
 ## A heating coil over `area`, with `bellows` bellows touching it.
@@ -144,28 +172,12 @@ static func _flat(points: PackedVector2Array, origin: Vector2) -> PackedFloat64A
 	return flat
 
 
-## A new id for a group of walls that can be switched off together.
-func new_wall_group() -> int:
-	_wall_groups += 1
-	return _wall_groups - 1
-
-
 ## A sorter box: items whose centers enter `intake` go inside, then drop out at `drop` (the
 ## box's bottom middle) if their material is `filter`, or come out past `out_x` on the belt
 ## line `out_y` moving at `out_vx`.
 func add_sorter(intake: Rect2, filter: StringName, out_x: float, out_y: float, out_vx: float, drop_x: float, drop_y: float) -> void:
 	world.add_sorter(intake.position.x, intake.position.y, intake.end.x, intake.end.y,
 			ItemDefs.ORDER.find(filter), out_x, out_y, out_vx, drop_x, drop_y)
-
-
-## An area that swallows items while open; returns its id for Smelter.
-func add_intake(area: Rect2) -> int:
-	return world.add_intake(area.position.x, area.position.y, area.end.x, area.end.y)
-
-
-func add_smelter(cell: Vector2i, smelter: Smelter) -> void:
-	smelters.append(smelter)
-	smelters_by_cell[cell] = smelter
 
 
 func finish_build() -> void:
@@ -175,13 +187,11 @@ func finish_build() -> void:
 # --- Running and reading ---------------------------------------------------------------
 
 func step() -> void:
-	var pumping := Smelter.is_pumping(tick)
+	var pumping := is_pumping(tick)
 	for heater in heaters:
 		var boost: float = 1.0 + (BELLOWS_BOOST * heater[1] if pumping else 0.0)
 		world.set_heater_power(heater[0], COIL_POWER * boost)
 	world.step()
-	for smelter in smelters:
-		smelter.step(self)
 
 
 ## Drops an item into the world (tests and future player actions). Returns its index.
@@ -198,7 +208,7 @@ func sleeping_count() -> int:
 
 
 ## One item's state: kind, size (names), shape, x, y, c, s, vx, vy, w, radius, sleeping,
-## carried, and world (its outline in world space as flat x, y pairs).
+## carried, temp, and world (its outline in world space as flat x, y pairs).
 func item(index: int) -> Dictionary:
 	var data: Dictionary = world.get_item(index)
 	data["kind"] = ItemDefs.ORDER[data["kind"]]
