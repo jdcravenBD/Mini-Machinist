@@ -62,7 +62,7 @@ static func build(machine: Machine) -> Simulation:
 		var x1 := x0 + size.x * T
 		var y1 := y0 + size.y * T
 		match p.type:
-			&"block":
+			&"block", &"color_block_1", &"color_block_2", &"color_block_3", &"color_block_4", &"color_block_5", &"color_block_6":
 				_add_box(sim, machine, p)
 			&"spawner":
 				_add_box(sim, machine, p)
@@ -126,7 +126,7 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 	if part == null:
 		return false
 	match part.type:
-		&"block", &"spawner", &"heating_coil", &"bellows", &"insulation", &"skimmer":
+		&"block", &"spawner", &"heating_coil", &"bellows", &"insulation", &"skimmer", &"color_block_1", &"color_block_2", &"color_block_3", &"color_block_4", &"color_block_5", &"color_block_6":
 			return true
 		&"conveyor":
 			# Only its top: the belt runs the full width, but the body is half a tile tall.
