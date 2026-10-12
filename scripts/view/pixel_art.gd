@@ -37,6 +37,9 @@ const FONT := {
 	"4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
 	"5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
 	"6": [".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."],
+	"P": ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
+	"M": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+	"!": ["..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."],
 	"#": [".#.#.", ".#.#.", "#####", ".#.#.", "#####", ".#.#.", ".#.#."],
 }
 
@@ -158,6 +161,16 @@ static func _make_part(p: Part) -> Dictionary:
 			art.letter_at = Vector2(size.x * 0.5, 9)
 			art.letter_scale = 1
 			art.letter_on_background = true
+		&"signal":
+			# Dots along the bottom for how often it fires: 1, 2 or 4 seconds, or a short dash
+			# for half a second.
+			var dots: int = [1, 2, 4, 0][p.variant % 4]
+			var ink := art.color.darkened(0.6)
+			if dots == 0:
+				art.patches.append([Rect2(14, 25, 4, 2), ink])
+			for i in dots:
+				art.patches.append([Rect2(16 - dots * 3 + i * 6 + 1, 24, 4, 4), ink])
+			art.letter_at = Vector2(16, 13)
 		&"panel":
 			art.stroke = 1.0
 			art.letter = ""

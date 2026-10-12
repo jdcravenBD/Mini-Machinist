@@ -46,6 +46,8 @@ var delivered: Dictionary:
 var heaters: Array = []
 
 var _bin_rects: Array[Rect2] = []
+## Piston cell -> its id, for drawing its plate.
+var pistons_by_cell := {}
 
 
 func _init() -> void:
@@ -56,6 +58,21 @@ func _init() -> void:
 				world.register_type(ItemDefs.ORDER.find(kind), ItemDefs.size_rank(size), shape, ItemDefs.outline(kind, size, shape))
 	for kind in ItemDefs.ORDER:
 		world.set_melt_point(ItemDefs.ORDER.find(kind), ItemDefs.DEFS[kind]["melt"])
+
+
+## How often a signal fires (ticks), by its variant (R): 1 s, 2 s, 4 s, half a second.
+const SIGNAL_INTERVALS := [60, 120, 240, 30]
+## How long a signal stays lit after firing (ticks), for drawing.
+const SIGNAL_LIT_TICKS := 8
+
+
+static func signal_interval(variant: int) -> int:
+	return SIGNAL_INTERVALS[variant % SIGNAL_INTERVALS.size()]
+
+
+## True while a signal with this variant shows that it just fired.
+static func is_signal_lit(at_tick: int, variant: int) -> bool:
+	return at_tick % signal_interval(variant) < SIGNAL_LIT_TICKS
 
 
 ## True while bellows are pumping.
@@ -133,6 +150,20 @@ func fill_part(origin: Vector2, shapes: Dictionary, material: HeatMaterial) -> v
 	for outline in outlines:
 		world.heat_fill_polygon(_flat(outline, origin), material)
 		world.pixel_fill_polygon(_flat(outline, origin))
+
+
+func add_signal(interval: int) -> int:
+	return world.add_signal(interval)
+
+
+## A piston at `cell` whose plate spans x0..x1 and sits with its bottom at `top` when in.
+func add_piston(cell: Vector2i, x0: float, x1: float, top: float, travel: float, power: int, signals: PackedInt32Array) -> void:
+	pistons_by_cell[cell] = world.add_piston(x0, x1, top, travel, power, signals)
+
+
+## How far down a piston's plate is.
+func piston_extension(cell: Vector2i) -> float:
+	return world.piston_extension(pistons_by_cell[cell]) if pistons_by_cell.has(cell) else 0.0
 
 
 ## A skimmer's box: molten slag touching it is taken off and dropped out its far side.

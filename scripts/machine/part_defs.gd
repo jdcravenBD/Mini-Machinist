@@ -10,6 +10,7 @@ const TILE := 32
 ## Toolbar categories, in order. Number keys pick a part within the open category.
 const CATEGORIES := [
 	{"name": "Moving", "parts": [&"conveyor", &"sorter", &"ramp", &"hopper"]},
+	{"name": "Machines", "parts": [&"piston", &"small_motor", &"signal"]},
 	{"name": "Crushing", "parts": [&"large_crusher", &"small_crusher"]},
 	{"name": "Smelting", "parts": [&"heating_coil", &"bellows", &"insulation", &"skimmer"]},
 	{"name": "Building", "parts": [&"block", &"panel"]},
@@ -162,6 +163,31 @@ const DEFS := {
 		"variants": 1,
 		"color": Color(0.22, 0.45, 0.80),
 		"hint": "A solid blue block numbered 6 (a placeholder for parts to come).",
+	},
+	&"piston": {
+		"name": "Piston",
+		"letter": "P",
+		"size": Vector2i(1, 1),
+		"variants": 1,
+		"color": Color(0.90, 0.80, 0.22),
+		"hint": "Slams a plate down one tile, hard enough to crush what it pins against something below. Needs a motor touching it; it creeps back up faster with more motors. Without a signal touching it, it stays down.",
+	},
+	&"small_motor": {
+		"name": "Small Motor",
+		"letter": "M",
+		"size": Vector2i(1, 1),
+		"variants": 1,
+		"color": Color(0.88, 0.50, 0.15),
+		"power": 1,
+		"hint": "Powers the machine parts it touches. More motors on a piston pull it back up faster.",
+	},
+	&"signal": {
+		"name": "Signal",
+		"letter": "!",
+		"size": Vector2i(1, 1),
+		"variants": 4,
+		"color": Color(0.75, 0.22, 0.20),
+		"hint": "Fires the machine parts it touches, on a timer. R changes how often.",
 	},
 	&"panel": {
 		"name": "Panel",

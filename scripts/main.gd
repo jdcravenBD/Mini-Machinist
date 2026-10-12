@@ -90,6 +90,7 @@ func _handle_key(keycode: Key) -> void:
 		_toggle_play()
 	elif keycode == KEY_R:
 		variant += 1
+		_update_hint()
 	elif keycode == KEY_F:
 		_cycle_filter()
 	elif keycode == KEY_HOME:
@@ -157,6 +158,8 @@ func _update_hint() -> void:
 	var text: String = PartDefs.DEFS[selected]["hint"]
 	if PartDefs.has_filter(selected):
 		text = "Drops: %s.  %s" % [ItemDefs.DEFS[sorter_filter]["name"], text]
+	if selected == &"signal":
+		text = "Fires every %s s.  %s" % [str(Simulation.signal_interval(variant) / 60.0), text]
 	hud.set_hint(text)
 
 

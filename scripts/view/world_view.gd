@@ -10,6 +10,8 @@ extends Node2D
 ## sorter boxes (over the items riding through them) and the placement preview (a child).
 
 const T := PartDefs.TILE
+## A piston plate's thickness (as in the physics).
+const PISTON_PLATE := 6.0
 const BACKGROUND := Color(0.16, 0.155, 0.15)
 const GRID_LINE := Color(1, 1, 1, 0.05)
 const BORDER := Color(1, 1, 1, 0.18)
@@ -218,6 +220,14 @@ func _draw_part(p: Part, tint: Color, canvas: CanvasItem = self) -> void:
 				var cy := T * (0.25 + row * 0.5)
 				_draw_roller(origin + Vector2(T * 0.25, cy), r, 1.0, def, tint, canvas)
 				_draw_roller(origin + Vector2(T * 0.75, cy), r, -1.0, def, tint, canvas)
+		&"piston":
+			var art := PixelArt.part(p)
+			canvas.draw_texture(art["texture"], origin, tint)
+			_draw_piston_plate(p, def, tint, canvas)
+		&"signal":
+			var art := PixelArt.part(p)
+			var lit := sim != null and Simulation.is_signal_lit(sim.tick, p.variant)
+			canvas.draw_texture(art["texture"], origin, tint * (Color(1.6, 1.6, 1.6) if lit else Color.WHITE))
 		&"bellows":
 			# Squashed from the top while it's pumping.
 			var art := PixelArt.part(p)
@@ -227,6 +237,21 @@ func _draw_part(p: Part, tint: Color, canvas: CanvasItem = self) -> void:
 		_:
 			var art := PixelArt.part(p)
 			canvas.draw_texture(art["texture"], origin + art["offset"], tint)
+
+
+## A piston's rod and plate, as far down as the plate is.
+func _draw_piston_plate(p: Part, def: Dictionary, tint: Color, canvas: CanvasItem) -> void:
+	var ext := sim.piston_extension(p.cell) if sim else 0.0
+	var origin := Vector2(p.cell * T)
+	var inset := PartGeometry.PISTON_INSET
+	var bottom := T + ext
+	var plate := Rect2(origin + Vector2(inset, bottom - PISTON_PLATE), Vector2(T - inset * 2.0, PISTON_PLATE))
+	var color: Color = def["color"]
+	var dark := color.darkened(PixelArt.STROKE_SHADE)
+	if ext > 0.0:
+		canvas.draw_rect(Rect2(origin + Vector2(T * 0.5 - 4.0, T - 2.0), Vector2(8.0, ext - PISTON_PLATE + 2.0)), Color(0.55, 0.55, 0.58) * tint)
+	canvas.draw_rect(plate, dark * tint)
+	canvas.draw_rect(plate.grow(-1.0), color.lightened(0.15) * tint)
 
 
 ## A crusher roller, turned as it spins so its letter shows the turning.

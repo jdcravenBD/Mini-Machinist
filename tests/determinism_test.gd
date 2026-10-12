@@ -35,8 +35,19 @@ func _init() -> void:
 	for x in range(4, 18):
 		melting.place(&"panel", Vector2i(x, 11), 2)
 
+	# A piston on a timer slamming ore on a belt into bits and gravel.
+	var piston := Machine.new()
+	piston.place(&"spawner", Vector2i(4, 2))
+	for x in range(3, 12):
+		piston.place(&"conveyor", Vector2i(x, 6))
+	piston.place(&"piston", Vector2i(7, 4))
+	piston.place(&"small_motor", Vector2i(7, 3))
+	piston.place(&"small_motor", Vector2i(6, 4))
+	piston.place(&"signal", Vector2i(8, 4), 3)
+	piston.place(&"bin", Vector2i(12, 7))
+
 	var same := true
-	for entry in [["Demo", demo], ["Crushing line", crushing], ["Melting", melting]]:
+	for entry in [["Demo", demo], ["Crushing line", crushing], ["Melting", melting], ["Piston", piston]]:
 		var start := Time.get_ticks_msec()
 		var first := _run(entry[1])
 		var elapsed := Time.get_ticks_msec() - start

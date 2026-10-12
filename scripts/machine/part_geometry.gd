@@ -22,6 +22,9 @@ const SORTER_WALL_DROP := 4.0
 ## How far above its roof a sorter takes in items that land there.
 const SORTER_TOP_REACH := 18.0
 
+## A piston's plate is this much narrower than its tile on each side.
+const PISTON_INSET := 2.0
+
 ## Crushers are nothing but toothed rollers: a large crusher's two each fill a tile, a small
 ## crusher's four each fill a quarter of its tile. They nearly touch, so nothing falls
 ## between them; the crusher itself decides what goes through (see Simulation.Crusher).
@@ -62,6 +65,8 @@ static func build(machine: Machine) -> Simulation:
 		var x1 := x0 + size.x * T
 		var y1 := y0 + size.y * T
 		match p.type:
+			&"piston", &"small_motor", &"signal":
+				_add_box(sim, machine, p)
 			&"block", &"color_block_1", &"color_block_2", &"color_block_3", &"color_block_4", &"color_block_5", &"color_block_6":
 				_add_box(sim, machine, p)
 			&"spawner":
@@ -110,6 +115,7 @@ static func build(machine: Machine) -> Simulation:
 				sim.add_segment(Segment.new(l, y1, r, y1))
 				sim.add_segment(Segment.new(r, y1, r, y0))
 				sim.add_bin(l, y0 + BIN_CATCH_DEPTH, r, y1)
+	_add_machines(sim, machine)
 	sim.finish_build()
 	_add_heat(sim, machine)
 	return sim
@@ -126,7 +132,7 @@ static func has_full_edge(machine: Machine, cell: Vector2i, side: Vector2i) -> b
 	if part == null:
 		return false
 	match part.type:
-		&"block", &"spawner", &"heating_coil", &"bellows", &"insulation", &"skimmer", &"color_block_1", &"color_block_2", &"color_block_3", &"color_block_4", &"color_block_5", &"color_block_6":
+		&"block", &"piston", &"small_motor", &"signal", &"spawner", &"heating_coil", &"bellows", &"insulation", &"skimmer", &"color_block_1", &"color_block_2", &"color_block_3", &"color_block_4", &"color_block_5", &"color_block_6":
 			return true
 		&"conveyor":
 			# Only its top: the belt runs the full width, but the body is half a tile tall.
@@ -206,6 +212,28 @@ static func _belt_continues(machine: Machine, cell: Vector2i, side: Vector2i) ->
 	if next != null and (next.type == &"conveyor" or (next.type == &"sorter" and next.cell == cell)):
 		return true
 	return has_full_edge(machine, cell, side)
+
+
+## Signals and pistons. A piston works when a motor touches it, and fires on the signals
+## touching it (or, with none, once, staying down). Its plate needs the tile under it free.
+static func _add_machines(sim: Simulation, machine: Machine) -> void:
+	var signals := {}
+	for p in machine.sorted_parts():
+		if p.type == &"signal":
+			signals[p] = sim.add_signal(Simulation.signal_interval(p.variant))
+	for p in machine.sorted_parts():
+		if p.type != &"piston":
+			continue
+		var power := 0
+		var fired_by := PackedInt32Array()
+		for touching in _touching_parts(machine, p):
+			var other: Part = touching[0]
+			power += int(PartDefs.DEFS[other.type].get("power", 0))
+			if signals.has(other):
+				fired_by.append(signals[other])
+		var travel := 0.0 if machine.part_at(p.cell + Vector2i.DOWN) else float(T)
+		var x0 := float(p.cell.x * T)
+		sim.add_piston(p.cell, x0 + PISTON_INSET, x0 + T - PISTON_INSET, float((p.cell.y + 1) * T), travel, power, fired_by)
 
 
 ## Fills the heat map with every part's material (insulation, or metal for everything else)

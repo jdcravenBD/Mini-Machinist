@@ -172,6 +172,12 @@ void ItemWorld::add_segment(double p_ax, double p_ay, double p_bx, double p_by, 
 
 void ItemWorld::finish_build() {
 	segments = merge_runs(segments);
+	// Piston plates move, so they're never merged with anything; they go on the end.
+	for (Piston &p : pistons) {
+		p.first_segment = (int)segments.size();
+		segments.resize(segments.size() + 4);
+		_place_plate(p);
+	}
 	_index_segments();
 }
 
@@ -548,6 +554,7 @@ void ItemWorld::step() {
 	_run_spawners();
 	_run_crushers();
 	_run_sorters();
+	_run_pistons();
 	for (Body &it : items) {
 		it.prev_x = it.x;
 		it.prev_y = it.y;
@@ -564,6 +571,7 @@ void ItemWorld::step() {
 		_settle_velocities(item_contacts);
 		_settle_velocities(wall_contacts);
 	}
+	_crush_under_pistons();
 	_update_sleep();
 	_check_support();
 	_collect();
@@ -667,6 +675,174 @@ void ItemWorld::_run_sorters() {
 		items.push_back(out);
 		so.inside.erase(so.inside.begin());
 	}
+}
+
+// --- Pistons --------------------------------------------------------------------------
+
+int ItemWorld::add_signal(int p_interval) {
+	signal_intervals.push_back(std::max(1, p_interval));
+	return (int)signal_intervals.size() - 1;
+}
+
+int ItemWorld::add_piston(double p_x0, double p_x1, double p_top, double p_travel, int p_power, const PackedInt32Array &p_signals) {
+	Piston p;
+	p.x0 = p_x0;
+	p.x1 = p_x1;
+	p.top = p_top;
+	p.travel = p_travel;
+	p.power = p_power;
+	for (int i = 0; i < p_signals.size(); i++) {
+		p.signals.push_back(p_signals[i]);
+	}
+	pistons.push_back(p);
+	return (int)pistons.size() - 1;
+}
+
+double ItemWorld::piston_extension(int p_piston) const {
+	if (p_piston < 0 || p_piston >= (int)pistons.size()) {
+		return 0.0;
+	}
+	return pistons[p_piston].ext;
+}
+
+// Sets a piston's plate segments to where its plate is now (clockwise, facing out).
+void ItemWorld::_place_plate(const Piston &p) {
+	double bottom = p.top + p.ext;
+	double top = bottom - PISTON_PLATE;
+	Segment *s = &segments[p.first_segment];
+	s[0] = make_segment(p.x0, top, p.x1, top, 0.0, 0.6, -1, false);
+	s[1] = make_segment(p.x1, top, p.x1, bottom, 0.0, 0.6, -1, false);
+	s[2] = make_segment(p.x1, bottom, p.x0, bottom, 0.0, 0.6, -1, false);
+	s[3] = make_segment(p.x0, bottom, p.x0, top, 0.0, 0.6, -1, false);
+}
+
+// Fires pistons whose signals fire this tick (or, with no signals, as soon as they can), and
+// moves each plate: down at a fixed speed, back up at a speed set by its motors.
+void ItemWorld::_run_pistons() {
+	bool moved = false;
+	for (Piston &p : pistons) {
+		if (p.power <= 0 || p.travel <= 0.0) {
+			continue;
+		}
+		bool fired = p.signals.empty();
+		for (int sig : p.signals) {
+			if (sig >= 0 && sig < (int)signal_intervals.size() && tick % signal_intervals[sig] == 0) {
+				fired = true;
+			}
+		}
+		double was = p.ext;
+		if (p.state == 0 && fired) {
+			p.state = 1;
+		}
+		if (p.state == 1) {
+			p.ext = std::min(p.travel, p.ext + p.travel / PISTON_EXTEND_TICKS);
+			if (p.ext >= p.travel) {
+				p.state = 2;
+			}
+		} else if (p.state == 2) {
+			// Out: with signals it heads straight back; without, it stays out.
+			if (!p.signals.empty()) {
+				p.state = 3;
+			}
+		} else if (p.state == 3) {
+			p.ext = std::max(0.0, p.ext - p.travel * p.power / PISTON_RETRACT_TICKS);
+			if (p.ext <= 0.0) {
+				p.state = 0;
+			}
+		}
+		if (p.ext != was) {
+			moved = true;
+			_place_plate(p);
+			// Wake anything near the plate so it gets pushed (or follows it back up).
+			double reach = MAX_RADIUS * 2.0;
+			double low = p.top - PISTON_PLATE - reach, high = p.top + std::max(p.ext, was) + reach;
+			for (Body &it : items) {
+				if (it.sleeping && it.x > p.x0 - reach && it.x < p.x1 + reach && it.y > low && it.y < high) {
+					_wake(it);
+				}
+			}
+		}
+	}
+	if (moved) {
+		_index_segments();
+	}
+}
+
+// After the physics: an item under a slamming plate that couldn't get out of its way (it's
+// squeezed into the plate) is crushed. Something too small to crush stops the plate.
+void ItemWorld::_crush_under_pistons() {
+	for (Piston &p : pistons) {
+		if (p.state != 1) {
+			continue;
+		}
+		double plate_y = p.top + p.ext;
+		double stuck = 0.0;
+		// Only what was there before this pass: fresh pieces wait for the plate's next move.
+		int count = (int)items.size();
+		for (int i = 0; i < count;) {
+			const Body &it = items[i];
+			const ItemType &t = types[it.type];
+			if (it.y < plate_y || it.y - t.radius > plate_y || it.x + t.radius < p.x0 || it.x - t.radius > p.x1) {
+				i++;
+				continue;
+			}
+			double top = std::numeric_limits<double>::infinity();
+			for (int k = 0; k < t.count; k++) {
+				double px = it.x + it.c * t.local[k * 2] - it.s * t.local[k * 2 + 1];
+				double py = it.y + it.s * t.local[k * 2] + it.c * t.local[k * 2 + 1];
+				if (px > p.x0 && px < p.x1) {
+					top = std::min(top, py);
+				}
+			}
+			double depth = plate_y - top;
+			if (depth <= CRUSH_SQUEEZE) {
+				i++;
+				continue;
+			}
+			if (_crush(i, plate_y)) {
+				count--;
+				continue;
+			}
+			stuck = std::max(stuck, depth);
+			i++;
+		}
+		if (stuck > 0.0) {
+			// Back off to just touching it.
+			p.ext = std::max(0.0, p.ext - stuck);
+			p.state = 2;
+			_place_plate(p);
+			_index_segments();
+		}
+	}
+}
+
+// Breaks item `p_index` into three pieces one size down, squirting out sideways from under a
+// plate at `p_plate_y`. Returns false (and leaves it) if it can't get any smaller.
+bool ItemWorld::_crush(int p_index, double p_plate_y) {
+	const Body it = items[p_index];
+	const ItemType &t = types[it.type];
+	int rank = t.size_rank + 1;
+	int shape_count = 0;
+	while (type_lookup.count(type_key(t.kind, rank, shape_count))) {
+		shape_count++;
+	}
+	if (shape_count == 0) {
+		return false;
+	}
+	items.erase(items.begin() + p_index);
+	for (int k = 0; k < 3; k++) {
+		int type = type_lookup[type_key(t.kind, rank, (t.shape + k + 1) % shape_count)];
+		double r = types[type].radius;
+		double side = k - 1.0;
+		int rot = ((t.shape + k) % SPAWN_ROTATION_COUNT) * 2;
+		Body piece;
+		_init_body(piece, type, it.x + side * r * 1.3, std::max(it.y + t.radius - r, p_plate_y + r * 0.5), SPAWN_ROTATIONS[rot], SPAWN_ROTATIONS[rot + 1]);
+		piece.temp = it.temp;
+		piece.vx = side * CRUSH_SQUIRT + it.vx;
+		items.push_back(piece);
+	}
+	_wake_near(it.x, it.y);
+	return true;
 }
 
 // The crushed item comes out as several smaller pieces in a fixed little spread (or, if it
@@ -1671,6 +1847,10 @@ void ItemWorld::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_bin", "min_x", "min_y", "max_x", "max_y"), &ItemWorld::add_bin);
 	ClassDB::bind_method(D_METHOD("add_crusher", "takes", "makes", "pieces", "duration", "min_x", "min_y", "max_x", "max_y", "press_y", "exit_x", "exit_y"), &ItemWorld::add_crusher);
 	ClassDB::bind_method(D_METHOD("add_item", "type", "x", "y", "c", "s", "vx", "vy"), &ItemWorld::add_item);
+	ClassDB::bind_method(D_METHOD("add_signal", "interval"), &ItemWorld::add_signal);
+	ClassDB::bind_method(D_METHOD("add_piston", "x0", "x1", "top", "travel", "power", "signals"), &ItemWorld::add_piston);
+	ClassDB::bind_method(D_METHOD("piston_count"), &ItemWorld::piston_count);
+	ClassDB::bind_method(D_METHOD("piston_extension", "piston"), &ItemWorld::piston_extension);
 	ClassDB::bind_method(D_METHOD("add_sorter", "x0", "y0", "x1", "y1", "pass_top", "belt_y", "top_reach", "filter", "out_vx"), &ItemWorld::add_sorter);
 	ClassDB::bind_method(D_METHOD("type_radius", "type"), &ItemWorld::type_radius);
 	ClassDB::bind_method(D_METHOD("heat_fill_rect", "x0", "y0", "x1", "y1", "material"), &ItemWorld::heat_fill_rect);

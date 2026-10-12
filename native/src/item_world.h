@@ -126,6 +126,27 @@ public:
 		int timer = 0;
 	};
 
+	// A piston: a plate under its body that slams down `travel` pixels at a fixed speed when
+	// it's fired, then creeps back up as fast as the motors touching it allow. Whatever the
+	// plate pinches against something below is crushed one size down, the pieces squirting
+	// out sideways; something too small to crush stops the plate where it is. Without signals
+	// touching it, a powered piston fires once and stays out.
+	struct Piston {
+		// The plate's sides, and its bottom edge when retracted (the body's bottom).
+		double x0, x1, top;
+		double travel;
+		// How far down the plate is now.
+		double ext = 0.0;
+		// Motors touching it; with none it never moves.
+		int power = 0;
+		// Signal timers touching it.
+		std::vector<int> signals;
+		// 0 in, 1 slamming down, 2 out, 3 creeping back up.
+		int state = 0;
+		// Its plate's four segments in `segments`.
+		int first_segment = -1;
+	};
+
 	struct Contact {
 		int a, b;
 		double lax, lay, lbx, lby, nx, ny;
@@ -154,6 +175,11 @@ public:
 	int add_bin(double p_min_x, double p_min_y, double p_max_x, double p_max_y);
 	int add_crusher(int p_takes, int p_makes, int p_pieces, int p_duration, double p_min_x, double p_min_y, double p_max_x, double p_max_y, double p_press_y, double p_exit_x, double p_exit_y);
 	int add_item(int p_type, double p_x, double p_y, double p_c, double p_s, double p_vx, double p_vy);
+	// A timer that fires every `interval` ticks (on tick 0, interval, ...); returns its id.
+	int add_signal(int p_interval);
+	int add_piston(double p_x0, double p_x1, double p_top, double p_travel, int p_power, const PackedInt32Array &p_signals);
+	int piston_count() const { return (int)pistons.size(); }
+	double piston_extension(int p_piston) const;
 	int add_sorter(double p_x0, double p_y0, double p_x1, double p_y1, double p_pass_top, double p_belt_y, double p_top_reach, int p_filter, double p_out_vx);
 
 	// Heat.
@@ -229,6 +255,16 @@ private:
 	static constexpr double SUPPORT_SLOPE = 0.3;
 	static constexpr int PASS_TICKS = 6;
 	static constexpr double BELT_PRESS = 0.15;
+	// Pistons: the plate takes PISTON_EXTEND_TICKS to slam down, and PISTON_RETRACT_TICKS to
+	// come back up with one motor (half that with two, and so on). An item squeezed this far
+	// into the plate is pinched and gets crushed.
+	static constexpr int PISTON_EXTEND_TICKS = 10;
+	static constexpr int PISTON_RETRACT_TICKS = 150;
+	static constexpr double PISTON_PLATE = 6.0;
+	static constexpr double CRUSH_SQUEEZE = 2.0;
+	// Crushed pieces squirt out from under the plate this fast.
+	static constexpr double CRUSH_SQUIRT = 60.0;
+
 	// How many items a sorter takes in through its roof at once, and how long each stays inside.
 	static constexpr int SORTER_HOLDS = 3;
 	static constexpr int SORTER_TICKS = 12;
@@ -282,6 +318,8 @@ private:
 	std::vector<Bin> bins;
 	std::vector<Crusher> crushers;
 	std::vector<Sorter> sorters;
+	std::vector<int> signal_intervals;
+	std::vector<Piston> pistons;
 
 	struct Heater {
 		std::vector<int> cells;
@@ -355,6 +393,10 @@ private:
 	void _run_spawners();
 	void _run_crushers();
 	void _run_sorters();
+	void _run_pistons();
+	void _place_plate(const Piston &p);
+	void _crush_under_pistons();
+	bool _crush(int p_index, double p_plate_y);
 	void _release_pieces(Crusher &cr);
 	bool _is_blocked_near(double p_x, double p_y, double p_reach) const;
 
