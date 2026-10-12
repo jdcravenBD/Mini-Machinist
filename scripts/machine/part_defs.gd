@@ -170,7 +170,7 @@ const DEFS := {
 		"size": Vector2i(1, 1),
 		"variants": 1,
 		"color": Color(0.90, 0.80, 0.22),
-		"hint": "Slams a plate down one tile, hard enough to crush what it pins against something below. Needs a motor touching it; it creeps back up faster with more motors. Without a signal touching it, it stays down.",
+		"hint": "Slams a plate down one tile, hard enough to crush what it pins against something below. Needs a motor touching it (motors chain power through each other); the more motors, the faster it creeps back up. Without a signal touching it, it stays down.",
 	},
 	&"small_motor": {
 		"name": "Small Motor",
@@ -179,7 +179,7 @@ const DEFS := {
 		"variants": 1,
 		"color": Color(0.88, 0.50, 0.15),
 		"power": 1,
-		"hint": "Powers the machine parts it touches. More motors on a piston pull it back up faster.",
+		"hint": "Powers the machine parts it touches, and passes its power on through other motors it touches. The more motors feeding a piston, the faster it pulls back up.",
 	},
 	&"signal": {
 		"name": "Signal",

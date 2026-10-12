@@ -239,7 +239,8 @@ func _draw_part(p: Part, tint: Color, canvas: CanvasItem = self) -> void:
 			canvas.draw_texture(art["texture"], origin + art["offset"], tint)
 
 
-## A piston's rod and plate, as far down as the plate is.
+## A piston's head: a shaft as wide as the plate (it's solid all the way, so nothing gets
+## above the plate) and the plate at the bottom, as far down as it is.
 func _draw_piston_plate(p: Part, def: Dictionary, tint: Color, canvas: CanvasItem) -> void:
 	var ext := sim.piston_extension(p.cell) if sim else 0.0
 	var origin := Vector2(p.cell * T)
@@ -249,7 +250,9 @@ func _draw_piston_plate(p: Part, def: Dictionary, tint: Color, canvas: CanvasIte
 	var color: Color = def["color"]
 	var dark := color.darkened(PixelArt.STROKE_SHADE)
 	if ext > 0.0:
-		canvas.draw_rect(Rect2(origin + Vector2(T * 0.5 - 4.0, T - 2.0), Vector2(8.0, ext - PISTON_PLATE + 2.0)), Color(0.55, 0.55, 0.58) * tint)
+		var shaft := Rect2(origin + Vector2(inset, T - 2.0), Vector2(T - inset * 2.0, ext - PISTON_PLATE + 2.0))
+		canvas.draw_rect(shaft, Color(0.40, 0.40, 0.43) * tint)
+		canvas.draw_rect(Rect2(shaft.position + Vector2(3.0, 0.0), Vector2(shaft.size.x - 6.0, shaft.size.y)), Color(0.55, 0.55, 0.58) * tint)
 	canvas.draw_rect(plate, dark * tint)
 	canvas.draw_rect(plate.grow(-1.0), color.lightened(0.15) * tint)
 

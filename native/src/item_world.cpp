@@ -571,7 +571,6 @@ void ItemWorld::step() {
 		_settle_velocities(item_contacts);
 		_settle_velocities(wall_contacts);
 	}
-	_crush_under_pistons();
 	_update_sleep();
 	_check_support();
 	_collect();
@@ -705,10 +704,11 @@ double ItemWorld::piston_extension(int p_piston) const {
 	return pistons[p_piston].ext;
 }
 
-// Sets a piston's plate segments to where its plate is now (clockwise, facing out).
+// Sets a piston's head segments to where its head is now (clockwise, facing out): from inside
+// the body down to the plate's bottom edge.
 void ItemWorld::_place_plate(const Piston &p) {
 	double bottom = p.top + p.ext;
-	double top = bottom - PISTON_PLATE;
+	double top = p.top - PISTON_PLATE;
 	Segment *s = &segments[p.first_segment];
 	s[0] = make_segment(p.x0, top, p.x1, top, 0.0, 0.6, -1, false);
 	s[1] = make_segment(p.x1, top, p.x1, bottom, 0.0, 0.6, -1, false);
@@ -736,6 +736,7 @@ void ItemWorld::_run_pistons() {
 		}
 		if (p.state == 1) {
 			p.ext = std::min(p.travel, p.ext + p.travel / PISTON_EXTEND_TICKS);
+			_shove_under_plate(p, p.top + was, p.top + p.ext);
 			if (p.ext >= p.travel) {
 				p.state = 2;
 			}
@@ -768,58 +769,200 @@ void ItemWorld::_run_pistons() {
 	}
 }
 
-// After the physics: an item under a slamming plate that couldn't get out of its way (it's
-// squeezed into the plate) is crushed. Something too small to crush stops the plate.
-void ItemWorld::_crush_under_pistons() {
-	for (Piston &p : pistons) {
-		if (p.state != 1) {
+// True if the item is under the plate (bottom edge at `p_plate_y`): its center is within the
+// plate's width (give or take a little) and not above the plate's bottom.
+bool ItemWorld::_under_plate(const Piston &p, const Body &it, double p_plate_y) const {
+	double r = types[it.type].radius;
+	return it.x > p.x0 - r * 0.3 && it.x < p.x1 + r * 0.3 && it.y > p_plate_y - r * 0.25 && it.y - r < p_plate_y + 1.0;
+}
+
+// The highest point of the item under the plate's width (or of the whole item, if no corner
+// is under it).
+double ItemWorld::_top_under_plate(const Piston &p, const Body &it) const {
+	const ItemType &t = types[it.type];
+	double top = std::numeric_limits<double>::infinity();
+	double any = top;
+	for (int k = 0; k < t.count; k++) {
+		double px = it.x + it.c * t.local[k * 2] - it.s * t.local[k * 2 + 1];
+		double py = it.y + it.s * t.local[k * 2] + it.c * t.local[k * 2 + 1];
+		any = std::min(any, py);
+		if (px > p.x0 && px < p.x1) {
+			top = std::min(top, py);
+		}
+	}
+	return top == std::numeric_limits<double>::infinity() ? any : top;
+}
+
+namespace {
+
+// Where a convex outline (flat x, y pairs) is at x: its lowest and highest y there. False if
+// x is outside it.
+bool outline_span_at(const double *pts, int n, double x, double &r_low, double &r_high) {
+	bool hit = false;
+	for (int i = 0; i < n; i++) {
+		int j = (i + 1) % n;
+		double ax = pts[i * 2], ay = pts[i * 2 + 1], bx = pts[j * 2], by = pts[j * 2 + 1];
+		if (ax == bx || x < std::min(ax, bx) || x > std::max(ax, bx)) {
 			continue;
 		}
-		double plate_y = p.top + p.ext;
-		double stuck = 0.0;
-		// Only what was there before this pass: fresh pieces wait for the plate's next move.
-		int count = (int)items.size();
-		for (int i = 0; i < count;) {
-			const Body &it = items[i];
-			const ItemType &t = types[it.type];
-			if (it.y < plate_y || it.y - t.radius > plate_y || it.x + t.radius < p.x0 || it.x - t.radius > p.x1) {
-				i++;
-				continue;
-			}
-			double top = std::numeric_limits<double>::infinity();
-			for (int k = 0; k < t.count; k++) {
-				double px = it.x + it.c * t.local[k * 2] - it.s * t.local[k * 2 + 1];
-				double py = it.y + it.s * t.local[k * 2] + it.c * t.local[k * 2 + 1];
-				if (px > p.x0 && px < p.x1) {
-					top = std::min(top, py);
+		double y = ay + (x - ax) / (bx - ax) * (by - ay);
+		if (!hit) {
+			r_low = r_high = y;
+			hit = true;
+		} else {
+			r_low = std::max(r_low, y);
+			r_high = std::min(r_high, y);
+		}
+	}
+	return hit;
+}
+
+} // namespace
+
+// How far item `p_index` can move straight down (up to `p_limit`) before it meets a wall or
+// another item: its corners dropping onto what's below, and what's below poking up into it.
+// The piston's own head doesn't count, nor do items in `p_gone`.
+double ItemWorld::_drop_room(int p_index, double p_limit, const Piston &p, const std::vector<char> &p_gone) const {
+	const Body &a = items[p_index];
+	const ItemType &ta = types[a.type];
+	double pa[MAX_CORNERS * 2];
+	double ax0 = std::numeric_limits<double>::infinity(), ax1 = -ax0, ay0 = ax0, ay1 = -ax0;
+	for (int k = 0; k < ta.count; k++) {
+		pa[k * 2] = a.x + a.c * ta.local[k * 2] - a.s * ta.local[k * 2 + 1];
+		pa[k * 2 + 1] = a.y + a.s * ta.local[k * 2] + a.c * ta.local[k * 2 + 1];
+		ax0 = std::min(ax0, pa[k * 2]);
+		ax1 = std::max(ax1, pa[k * 2]);
+		ay0 = std::min(ay0, pa[k * 2 + 1]);
+		ay1 = std::max(ay1, pa[k * 2 + 1]);
+	}
+	double room = p_limit;
+	auto take = [&](double gap) {
+		if (gap >= -ROOM_SLACK) {
+			room = std::min(room, std::max(0.0, gap));
+		}
+	};
+	for (int si = 0; si < (int)segments.size(); si++) {
+		if (si >= p.first_segment && si < p.first_segment + 4) {
+			continue;
+		}
+		const Segment &sg = segments[si];
+		if (sg.passes == ta.kind || std::max(sg.ax, sg.bx) < ax0 || std::min(sg.ax, sg.bx) > ax1
+				|| std::max(sg.ay, sg.by) < ay0 || std::min(sg.ay, sg.by) > ay1 + p_limit + ROOM_SLACK) {
+			continue;
+		}
+		if (sg.ax != sg.bx) {
+			for (int k = 0; k < ta.count; k++) {
+				double x = pa[k * 2];
+				if (x < std::min(sg.ax, sg.bx) || x > std::max(sg.ax, sg.bx)) {
+					continue;
 				}
+				take(sg.ay + (x - sg.ax) / (sg.bx - sg.ax) * (sg.by - sg.ay) - pa[k * 2 + 1]);
 			}
-			double depth = plate_y - top;
-			if (depth <= CRUSH_SQUEEZE) {
-				i++;
-				continue;
-			}
-			if (_crush(i, plate_y)) {
-				count--;
-				continue;
-			}
-			stuck = std::max(stuck, depth);
-			i++;
 		}
-		if (stuck > 0.0) {
-			// Back off to just touching it.
-			p.ext = std::max(0.0, p.ext - stuck);
-			p.state = 2;
-			_place_plate(p);
-			_index_segments();
+		for (int e = 0; e < 2; e++) {
+			double ex = e == 0 ? sg.ax : sg.bx, ey = e == 0 ? sg.ay : sg.by;
+			double low, high;
+			if (outline_span_at(pa, ta.count, ex, low, high)) {
+				take(ey - low);
+			}
 		}
+	}
+	for (int j = 0; j < (int)items.size(); j++) {
+		const Body &b = items[j];
+		const ItemType &tb = types[b.type];
+		if (j == p_index || (j < (int)p_gone.size() && p_gone[j]) || b.y < a.y || b.x + tb.radius < ax0 || b.x - tb.radius > ax1
+				|| b.y - tb.radius > ay1 + p_limit + ROOM_SLACK) {
+			continue;
+		}
+		double pb[MAX_CORNERS * 2];
+		for (int k = 0; k < tb.count; k++) {
+			pb[k * 2] = b.x + b.c * tb.local[k * 2] - b.s * tb.local[k * 2 + 1];
+			pb[k * 2 + 1] = b.y + b.s * tb.local[k * 2] + b.c * tb.local[k * 2 + 1];
+		}
+		double low, high;
+		for (int k = 0; k < ta.count; k++) {
+			if (outline_span_at(pb, tb.count, pa[k * 2], low, high)) {
+				take(high - pa[k * 2 + 1]);
+			}
+		}
+		for (int k = 0; k < tb.count; k++) {
+			if (outline_span_at(pa, ta.count, pb[k * 2], low, high)) {
+				take(pb[k * 2 + 1] - low);
+			}
+		}
+	}
+	return room;
+}
+
+// Before the physics: a plate moving down from `p_from_y` to `p_to_y` pushes what's under it
+// down as far as there's room. Whatever it pins is crushed there and then, and the pieces go
+// through the same; something too small to crush stops the plate on top of it.
+void ItemWorld::_shove_under_plate(Piston &p, double p_from_y, double p_to_y) {
+	double speed = (p_to_y - p_from_y) * TICK_RATE;
+	std::vector<int> under;
+	for (int i = 0; i < (int)items.size(); i++) {
+		if (_under_plate(p, items[i], p_from_y)) {
+			under.push_back(i);
+		}
+	}
+	// Lowest first, so what's underneath has made its room before what rests on it looks.
+	std::sort(under.begin(), under.end(), [&](int i, int j) {
+		return items[i].y != items[j].y ? items[i].y > items[j].y : i < j;
+	});
+	std::vector<char> gone(items.size(), 0);
+	double limit = p_to_y;
+	bool crushed = false;
+	for (size_t k = 0; k < under.size(); k++) {
+		int i = under[k];
+		double top = _top_under_plate(p, items[i]);
+		double need = limit - top;
+		if (need <= 0.0) {
+			continue;
+		}
+		double room = _drop_room(i, need, p, gone);
+		items[i].y += room;
+		items[i].vy = std::max(items[i].vy, speed);
+		_wake(items[i]);
+		if (need - room <= 1e-6) {
+			continue;
+		}
+		std::vector<Body> pieces;
+		if (!_break_up(items[i], pieces)) {
+			// Can't get any smaller: the plate stops on it.
+			limit = std::min(limit, top + room);
+			continue;
+		}
+		gone[i] = 1;
+		crushed = true;
+		for (const Body &piece : pieces) {
+			Body b;
+			_init_body(b, piece.type, piece.x, piece.y, piece.c, piece.s);
+			b.temp = piece.temp;
+			b.vx = piece.vx;
+			items.push_back(b);
+			gone.push_back(0);
+			under.push_back((int)items.size() - 1);
+		}
+	}
+	if (crushed) {
+		for (int i = (int)items.size() - 1; i >= 0; i--) {
+			if (gone[i]) {
+				double x = items[i].x, y = items[i].y;
+				items.erase(items.begin() + i);
+				_wake_near(x, y);
+			}
+		}
+	}
+	if (limit < p_to_y) {
+		p.ext = std::max(0.0, limit - p.top);
+		p.state = 2;
+		_place_plate(p);
 	}
 }
 
-// Breaks item `p_index` into three pieces one size down, squirting out sideways from under a
-// plate at `p_plate_y`. Returns false (and leaves it) if it can't get any smaller.
-bool ItemWorld::_crush(int p_index, double p_plate_y) {
-	const Body it = items[p_index];
+// Breaks an item into three pieces one size down, sitting where its bottom was and squirting
+// out sideways. Returns false if it can't get any smaller.
+bool ItemWorld::_break_up(const Body &it, std::vector<Body> &r_pieces) const {
 	const ItemType &t = types[it.type];
 	int rank = t.size_rank + 1;
 	int shape_count = 0;
@@ -829,19 +972,25 @@ bool ItemWorld::_crush(int p_index, double p_plate_y) {
 	if (shape_count == 0) {
 		return false;
 	}
-	items.erase(items.begin() + p_index);
+	double bottom = -std::numeric_limits<double>::infinity();
+	for (int k = 0; k < t.count; k++) {
+		bottom = std::max(bottom, it.y + it.s * t.local[k * 2] + it.c * t.local[k * 2 + 1]);
+	}
 	for (int k = 0; k < 3; k++) {
-		int type = type_lookup[type_key(t.kind, rank, (t.shape + k + 1) % shape_count)];
+		int type = type_lookup.at(type_key(t.kind, rank, (t.shape + k + 1) % shape_count));
 		double r = types[type].radius;
 		double side = k - 1.0;
 		int rot = ((t.shape + k) % SPAWN_ROTATION_COUNT) * 2;
 		Body piece;
-		_init_body(piece, type, it.x + side * r * 1.3, std::max(it.y + t.radius - r, p_plate_y + r * 0.5), SPAWN_ROTATIONS[rot], SPAWN_ROTATIONS[rot + 1]);
+		piece.type = type;
+		piece.x = it.x + side * r * 1.3;
+		piece.y = bottom - r;
+		piece.c = SPAWN_ROTATIONS[rot];
+		piece.s = SPAWN_ROTATIONS[rot + 1];
 		piece.temp = it.temp;
 		piece.vx = side * CRUSH_SQUIRT + it.vx;
-		items.push_back(piece);
+		r_pieces.push_back(piece);
 	}
-	_wake_near(it.x, it.y);
 	return true;
 }
 

@@ -214,26 +214,55 @@ static func _belt_continues(machine: Machine, cell: Vector2i, side: Vector2i) ->
 	return has_full_edge(machine, cell, side)
 
 
-## Signals and pistons. A piston works when a motor touches it, and fires on the signals
-## touching it (or, with none, once, staying down). Its plate needs the tile under it free.
+## Signals and pistons. Motors pass power to everything they touch, and on through any
+## motors they touch, so a piston gets the power of every motor in the touching group (or
+## groups) it touches. A piston fires on the signals touching it (or, with none, once,
+## staying down). Its plate needs the tile under it free.
 static func _add_machines(sim: Simulation, machine: Machine) -> void:
 	var signals := {}
 	for p in machine.sorted_parts():
 		if p.type == &"signal":
 			signals[p] = sim.add_signal(Simulation.signal_interval(p.variant))
+	var groups := _motor_groups(machine)
 	for p in machine.sorted_parts():
 		if p.type != &"piston":
 			continue
 		var power := 0
+		var counted := {}
 		var fired_by := PackedInt32Array()
 		for touching in _touching_parts(machine, p):
 			var other: Part = touching[0]
-			power += int(PartDefs.DEFS[other.type].get("power", 0))
+			if groups.has(other) and not counted.has(groups[other][0]):
+				var group: Array = groups[other]
+				counted[group[0]] = true
+				for motor in group:
+					power += int(PartDefs.DEFS[motor.type].get("power", 0))
 			if signals.has(other):
 				fired_by.append(signals[other])
 		var travel := 0.0 if machine.part_at(p.cell + Vector2i.DOWN) else float(T)
 		var x0 := float(p.cell.x * T)
 		sim.add_piston(p.cell, x0 + PISTON_INSET, x0 + T - PISTON_INSET, float((p.cell.y + 1) * T), travel, power, fired_by)
+
+
+## Each motor -> the group of motors it's joined to by touching (the same Array for all of
+## them, in placement-independent order).
+static func _motor_groups(machine: Machine) -> Dictionary:
+	var groups := {}
+	for p in machine.sorted_parts():
+		if not PartDefs.DEFS[p.type].has("power") or groups.has(p):
+			continue
+		var group: Array = []
+		var queue: Array = [p]
+		groups[p] = group
+		while not queue.is_empty():
+			var motor: Part = queue.pop_front()
+			group.append(motor)
+			for touching in _touching_parts(machine, motor):
+				var other: Part = touching[0]
+				if PartDefs.DEFS[other.type].has("power") and not groups.has(other):
+					groups[other] = group
+					queue.append(other)
+	return groups
 
 
 ## Fills the heat map with every part's material (insulation, or metal for everything else)

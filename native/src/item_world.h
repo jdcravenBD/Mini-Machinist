@@ -126,24 +126,27 @@ public:
 		int timer = 0;
 	};
 
-	// A piston: a plate under its body that slams down `travel` pixels at a fixed speed when
-	// it's fired, then creeps back up as fast as the motors touching it allow. Whatever the
-	// plate pinches against something below is crushed one size down, the pieces squirting
-	// out sideways; something too small to crush stops the plate where it is. Without signals
-	// touching it, a powered piston fires once and stays out.
+	// A piston: a head under its body that slams down `travel` pixels at a fixed speed when
+	// it's fired, then creeps back up as fast as its motors allow. The head is solid all the
+	// way up into the body (like a Minecraft piston's), so nothing ever gets above its plate.
+	// Whatever is under the plate is pushed down with it as far as there's room below; what
+	// it pins against something below is crushed one size down there and then (the pieces
+	// squirting out sideways, and crushed again if they don't fit either); something too small
+	// to crush stops it there. Without signals touching it, a powered piston fires once and stays
+	// out.
 	struct Piston {
 		// The plate's sides, and its bottom edge when retracted (the body's bottom).
 		double x0, x1, top;
 		double travel;
 		// How far down the plate is now.
 		double ext = 0.0;
-		// Motors touching it; with none it never moves.
+		// Power from the motors it's connected to; with none it never moves.
 		int power = 0;
 		// Signal timers touching it.
 		std::vector<int> signals;
 		// 0 in, 1 slamming down, 2 out, 3 creeping back up.
 		int state = 0;
-		// Its plate's four segments in `segments`.
+		// Its head's four segments in `segments`.
 		int first_segment = -1;
 	};
 
@@ -256,12 +259,13 @@ private:
 	static constexpr int PASS_TICKS = 6;
 	static constexpr double BELT_PRESS = 0.15;
 	// Pistons: the plate takes PISTON_EXTEND_TICKS to slam down, and PISTON_RETRACT_TICKS to
-	// come back up with one motor (half that with two, and so on). An item squeezed this far
-	// into the plate is pinched and gets crushed.
+	// come back up with one motor (half that with two, and so on). The head reaches
+	// PISTON_PLATE above the body's bottom even when it's all the way in. Something resting
+	// up to ROOM_SLACK into what's under it counts as touching it.
 	static constexpr int PISTON_EXTEND_TICKS = 10;
 	static constexpr int PISTON_RETRACT_TICKS = 150;
 	static constexpr double PISTON_PLATE = 6.0;
-	static constexpr double CRUSH_SQUEEZE = 2.0;
+	static constexpr double ROOM_SLACK = 2.0;
 	// Crushed pieces squirt out from under the plate this fast.
 	static constexpr double CRUSH_SQUIRT = 60.0;
 
@@ -395,8 +399,11 @@ private:
 	void _run_sorters();
 	void _run_pistons();
 	void _place_plate(const Piston &p);
-	void _crush_under_pistons();
-	bool _crush(int p_index, double p_plate_y);
+	void _shove_under_plate(Piston &p, double p_from_y, double p_to_y);
+	bool _under_plate(const Piston &p, const Body &it, double p_plate_y) const;
+	double _top_under_plate(const Piston &p, const Body &it) const;
+	double _drop_room(int p_index, double p_limit, const Piston &p, const std::vector<char> &p_gone) const;
+	bool _break_up(const Body &it, std::vector<Body> &r_pieces) const;
 	void _release_pieces(Crusher &cr);
 	bool _is_blocked_near(double p_x, double p_y, double p_reach) const;
 
